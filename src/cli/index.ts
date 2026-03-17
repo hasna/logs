@@ -1,0 +1,193 @@
+#!/usr/bin/env bun
+import { Command } from "commander"
+import { getDb } from "../db/index.ts"
+import { ingestLog } from "../lib/ingest.ts"
+import { searchLogs, tailLogs } from "../lib/query.ts"
+import { summarizeLogs } from "../lib/summarize.ts"
+import { createJob, listJobs } from "../lib/jobs.ts"
+import { createPage, createProject, listPages, listProjects } from "../lib/projects.ts"
+import { runJob } from "../lib/scheduler.ts"
+import type { LogLevel } from "../types/index.ts"
+
+const program = new Command()
+  .name("logs")
+  .description("@hasna/logs — log aggregation and monitoring")
+  .version("0.0.1")
+
+// ── logs list ──────────────────────────────────────────────
+program.command("list")
+  .description("Search and list logs")
+  .option("--project <id>", "Filter by project ID")
+  .option("--page <id>", "Filter by page ID")
+  .option("--level <levels>", "Comma-separated levels (error,warn,info,debug,fatal)")
+  .option("--service <name>", "Filter by service")
+  .option("--since <iso>", "Since timestamp or relative (1h, 24h, 7d)")
+  .option("--text <query>", "Full-text search")
+  .option("--limit <n>", "Max results", "100")
+  .option("--format <fmt>", "Output format: table|json|compact", "table")
+  .action((opts) => {
+    const db = getDb()
+    const since = parseRelativeTime(opts.since)
+    const rows = searchLogs(db, {
+      project_id: opts.project,
+      page_id: opts.page,
+      level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
+      service: opts.service,
+      since,
+      text: opts.text,
+      limit: Number(opts.limit),
+    })
+    if (opts.format === "json") { console.log(JSON.stringify(rows, null, 2)); return }
+    if (opts.format === "compact") {
+      for (const r of rows) console.log(`${r.timestamp} [${r.level.toUpperCase()}] ${r.service ?? "-"} ${r.message}`)
+      return
+    }
+    for (const r of rows) {
+      const meta = r.metadata ? ` ${r.metadata}` : ""
+      console.log(`${r.timestamp}  ${pad(r.level.toUpperCase(), 5)}  ${pad(r.service ?? "-", 12)}  ${r.message}${meta}`)
+    }
+    console.log(`\n${rows.length} log(s)`)
+  })
+
+// ── logs tail ──────────────────────────────────────────────
+program.command("tail")
+  .description("Show most recent logs")
+  .option("--project <id>")
+  .option("--n <count>", "Number of logs", "50")
+  .action((opts) => {
+    const rows = tailLogs(getDb(), opts.project, Number(opts.n))
+    for (const r of rows) console.log(`${r.timestamp}  ${pad(r.level.toUpperCase(), 5)}  ${r.message}`)
+  })
+
+// ── logs summary ──────────────────────────────────────────
+program.command("summary")
+  .description("Error/warn summary by service")
+  .option("--project <id>")
+  .option("--since <time>", "Relative time (1h, 24h, 7d)", "24h")
+  .action((opts) => {
+    const summary = summarizeLogs(getDb(), opts.project, parseRelativeTime(opts.since))
+    if (!summary.length) { console.log("No errors/warnings in this window."); return }
+    for (const s of summary) console.log(`${pad(s.level.toUpperCase(), 5)} ${pad(s.service ?? "-", 15)} count=${s.count} latest=${s.latest}`)
+  })
+
+// ── logs push ─────────────────────────────────────────────
+program.command("push <message>")
+  .description("Push a log entry")
+  .option("--level <level>", "Log level", "info")
+  .option("--service <name>")
+  .option("--project <id>")
+  .option("--trace <id>", "Trace ID")
+  .action((message, opts) => {
+    const row = ingestLog(getDb(), { level: opts.level as LogLevel, message, service: opts.service, project_id: opts.project, trace_id: opts.trace })
+    console.log(`Logged: ${row.id}`)
+  })
+
+// ── logs project ──────────────────────────────────────────
+const projectCmd = program.command("project").description("Manage projects")
+
+projectCmd.command("create")
+  .option("--name <name>", "Project name")
+  .option("--repo <url>", "GitHub repo")
+  .option("--url <url>", "Base URL")
+  .action((opts) => {
+    if (!opts.name) { console.error("--name is required"); process.exit(1) }
+    const p = createProject(getDb(), { name: opts.name, github_repo: opts.repo, base_url: opts.url })
+    console.log(`Created project: ${p.id} — ${p.name}`)
+  })
+
+projectCmd.command("list").action(() => {
+  const projects = listProjects(getDb())
+  for (const p of projects) console.log(`${p.id}  ${p.name}  ${p.base_url ?? ""}  ${p.github_repo ?? ""}`)
+})
+
+// ── logs page ─────────────────────────────────────────────
+const pageCmd = program.command("page").description("Manage pages")
+
+pageCmd.command("add")
+  .option("--project <id>")
+  .option("--url <url>")
+  .option("--name <name>")
+  .action((opts) => {
+    if (!opts.project || !opts.url) { console.error("--project and --url required"); process.exit(1) }
+    const p = createPage(getDb(), { project_id: opts.project, url: opts.url, name: opts.name })
+    console.log(`Page registered: ${p.id} — ${p.url}`)
+  })
+
+pageCmd.command("list").option("--project <id>").action((opts) => {
+  if (!opts.project) { console.error("--project required"); process.exit(1) }
+  const pages = listPages(getDb(), opts.project)
+  for (const p of pages) console.log(`${p.id}  ${p.url}  last=${p.last_scanned_at ?? "never"}`)
+})
+
+// ── logs job ──────────────────────────────────────────────
+const jobCmd = program.command("job").description("Manage scan jobs")
+
+jobCmd.command("create")
+  .option("--project <id>")
+  .option("--schedule <cron>", "Cron expression", "*/30 * * * *")
+  .action((opts) => {
+    if (!opts.project) { console.error("--project required"); process.exit(1) }
+    const j = createJob(getDb(), { project_id: opts.project, schedule: opts.schedule })
+    console.log(`Job created: ${j.id} — ${j.schedule}`)
+  })
+
+jobCmd.command("list").option("--project <id>").action((opts) => {
+  const jobs = listJobs(getDb(), opts.project)
+  for (const j of jobs) console.log(`${j.id}  ${j.schedule}  enabled=${j.enabled}  last=${j.last_run_at ?? "never"}`)
+})
+
+// ── logs scan ─────────────────────────────────────────────
+program.command("scan")
+  .description("Run an immediate scan for a job")
+  .option("--job <id>")
+  .option("--project <id>")
+  .action(async (opts) => {
+    if (!opts.job) { console.error("--job required"); process.exit(1) }
+    const db = getDb()
+    const job = (await import("../lib/jobs.ts")).getJob(db, opts.job)
+    if (!job) { console.error("Job not found"); process.exit(1) }
+    console.log("Running scan...")
+    await runJob(db, job.id, job.project_id, job.page_id ?? undefined)
+    console.log("Scan complete.")
+  })
+
+// ── logs mcp / logs serve ─────────────────────────────────
+program.command("mcp")
+  .description("Start the MCP server")
+  .option("--claude", "Install into Claude Code")
+  .option("--codex", "Install into Codex")
+  .option("--gemini", "Install into Gemini")
+  .action(async (opts) => {
+    if (opts.claude || opts.codex || opts.gemini) {
+      const bin = process.execPath
+      const script = new URL(import.meta.url).pathname
+      if (opts.claude) {
+        const { execSync } = await import("node:child_process")
+        execSync(`claude mcp add --transport stdio --scope user logs -- ${bin} ${script} mcp`, { stdio: "inherit" })
+      }
+      return
+    }
+    await import("../mcp/index.ts")
+  })
+
+program.command("serve")
+  .description("Start the REST API server")
+  .option("--port <n>", "Port", "3460")
+  .action(async (opts) => {
+    process.env.LOGS_PORT = opts.port
+    await import("../server/index.ts")
+  })
+
+// ── helpers ───────────────────────────────────────────────
+function pad(s: string, n: number) { return s.padEnd(n) }
+
+function parseRelativeTime(val?: string): string | undefined {
+  if (!val) return undefined
+  const m = val.match(/^(\d+)(h|d|m)$/)
+  if (!m) return val
+  const [, n, unit] = m
+  const ms = Number(n) * (unit === "h" ? 3600 : unit === "d" ? 86400 : 60) * 1000
+  return new Date(Date.now() - ms).toISOString()
+}
+
+program.parse()

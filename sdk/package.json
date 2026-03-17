@@ -1,0 +1,21 @@
+{
+  "name": "@hasna/logs-sdk",
+  "version": "0.0.1",
+  "description": "Zero-dependency fetch client for @hasna/logs",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./browser": "./dist/index.js"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target browser"
+  },
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "license": "MIT"
+}

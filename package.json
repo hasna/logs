@@ -1,0 +1,43 @@
+{
+  "name": "@hasna/logs",
+  "version": "0.0.1",
+  "description": "Log aggregation + browser script + headless page scanner + performance monitoring for AI agents",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "logs": "./dist/cli/index.js",
+    "logs-mcp": "./dist/mcp/index.js",
+    "logs-serve": "./dist/server/index.js"
+  },
+  "scripts": {
+    "build": "bun build src/cli/index.ts src/mcp/index.ts src/server/index.ts --outdir dist --target bun --splitting --external playwright --external playwright-core --external electron --external chromium-bidi --external lighthouse",
+    "dev": "bun run src/server/index.ts",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage",
+    "lint": "biome check src/"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "keywords": ["logs", "monitoring", "mcp", "ai-agents", "sentry", "performance", "lighthouse"],
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "commander": "^14.0.0",
+    "hono": "^4.7.11",
+    "ink": "^5.1.0",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.52.0",
+    "react": "^19.1.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/bun": "latest",
+    "@types/node-cron": "^3.0.11",
+    "@types/react": "^19.1.4",
+    "typescript": "^5.9.3"
+  }
+}
