@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { Hono } from "hono"
 import { cors } from "hono/cors"
+import { serveStatic } from "hono/bun"
 import { getDb } from "../db/index.ts"
 import { getBrowserScript } from "../lib/browser-script.ts"
 import { getHealth } from "../lib/health.ts"
@@ -37,7 +38,9 @@ app.route("/api/issues", issuesRoutes(db))
 app.route("/api/perf", perfRoutes(db))
 
 app.get("/health", (c) => c.json(getHealth(db)))
-app.get("/", (c) => c.json({ service: "@hasna/logs", port: PORT, status: "ok" }))
+app.get("/dashboard", (c) => c.redirect("/dashboard/"))
+app.use("/dashboard/*", serveStatic({ root: "./dashboard/dist", rewriteRequestPath: (p) => p.replace(/^\/dashboard/, "") }))
+app.get("/", (c) => c.json({ service: "@hasna/logs", port: PORT, status: "ok", dashboard: `http://localhost:${PORT}/dashboard/` }))
 
 // Start scheduler
 startScheduler(db)

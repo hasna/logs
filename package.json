@@ -1,6 +1,6 @@
 {
   "name": "@hasna/logs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Log aggregation + browser script + headless page scanner + performance monitoring for AI agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -12,6 +12,8 @@
   },
   "scripts": {
     "build": "bun build src/cli/index.ts src/mcp/index.ts src/server/index.ts --outdir dist --target bun --splitting --external playwright --external playwright-core --external electron --external chromium-bidi --external lighthouse",
+    "build:dashboard": "cd dashboard && bun run build",
+    "build:all": "bun run build:dashboard && bun run build",
     "dev": "bun run src/server/index.ts",
     "test": "bun test",
     "test:coverage": "bun test --coverage",

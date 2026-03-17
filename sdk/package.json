@@ -1,7 +1,7 @@
 {
   "name": "@hasna/logs-sdk",
-  "version": "0.0.1",
-  "description": "Zero-dependency fetch client for @hasna/logs",
+  "version": "0.1.0",
+  "description": "Zero-dependency fetch client for @hasna/logs — push logs, query, browse issues, perf snapshots",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -16,6 +16,7 @@
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target browser"
   },
+  "keywords": ["logs", "monitoring", "sdk", "ai-agents"],
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "MIT"
 }

@@ -14,6 +14,7 @@ import { listIssues, updateIssueStatus } from "../lib/issues.ts"
 import { diagnose } from "../lib/diagnose.ts"
 import { compare } from "../lib/compare.ts"
 import { getHealth } from "../lib/health.ts"
+import { getSessionContext } from "../lib/session-context.ts"
 import type { LogLevel, LogRow } from "../types/index.ts"
 
 const db = getDb()
@@ -47,6 +48,7 @@ const TOOLS: Record<string, string> = {
   create_alert_rule: "Create alert rule (project_id, name, level, threshold_count, window_seconds, webhook_url?)",
   list_alert_rules: "List alert rules (project_id?)",
   delete_alert_rule: "Delete alert rule (id)",
+  log_session_context: "Logs + session metadata for a session_id (requires SESSIONS_URL env)",
   get_health: "Server health + DB stats",
   search_tools: "Search tools by keyword (query)",
   describe_tools: "List all tools",
@@ -189,6 +191,14 @@ server.tool("list_alert_rules", {
 server.tool("delete_alert_rule", { id: z.string() }, ({ id }) => {
   deleteAlertRule(db, id)
   return { content: [{ type: "text", text: "deleted" }] }
+})
+
+server.tool("log_session_context", {
+  session_id: z.string(),
+  brief: z.boolean().optional(),
+}, async ({ session_id, brief }) => {
+  const ctx = await getSessionContext(db, session_id)
+  return { content: [{ type: "text", text: JSON.stringify({ ...ctx, logs: applyBrief(ctx.logs, brief !== false) }) }] }
 })
 
 server.tool("get_health", {}, () => ({

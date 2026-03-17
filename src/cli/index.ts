@@ -151,6 +151,58 @@ program.command("scan")
     console.log("Scan complete.")
   })
 
+// ── logs watch ────────────────────────────────────────────
+program.command("watch")
+  .description("Stream new logs in real time with color coding")
+  .option("--project <id>")
+  .option("--level <levels>", "Comma-separated levels")
+  .option("--service <name>")
+  .action(async (opts) => {
+    const db = getDb()
+    const { searchLogs } = await import("../lib/query.ts")
+
+    const COLORS: Record<string, string> = {
+      debug: "\x1b[90m", info: "\x1b[36m", warn: "\x1b[33m", error: "\x1b[31m", fatal: "\x1b[35m",
+    }
+    const RESET = "\x1b[0m"
+    const BOLD = "\x1b[1m"
+
+    let lastTimestamp = new Date().toISOString()
+    let errorCount = 0
+    let warnCount = 0
+
+    process.stdout.write(`\x1b[2J\x1b[H`) // clear screen
+    console.log(`${BOLD}@hasna/logs watch${RESET} — Ctrl+C to exit\n`)
+
+    const poll = () => {
+      const rows = searchLogs(db, {
+        project_id: opts.project,
+        level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
+        service: opts.service,
+        since: lastTimestamp,
+        limit: 100,
+      }).reverse()
+
+      for (const row of rows) {
+        if (row.timestamp <= lastTimestamp) continue
+        lastTimestamp = row.timestamp
+        if (row.level === "error" || row.level === "fatal") errorCount++
+        if (row.level === "warn") warnCount++
+        const color = COLORS[row.level] ?? ""
+        const ts = row.timestamp.slice(11, 19)
+        const svc = (row.service ?? "-").padEnd(12)
+        const lvl = row.level.toUpperCase().padEnd(5)
+        console.log(`${color}${ts}  ${BOLD}${lvl}${RESET}${color}  ${svc}  ${row.message}${RESET}`)
+      }
+
+      // Update terminal title with counts
+      process.stdout.write(`\x1b]2;logs: ${errorCount}E ${warnCount}W\x07`)
+    }
+
+    const interval = setInterval(poll, 500)
+    process.on("SIGINT", () => { clearInterval(interval); console.log(`\n\nErrors: ${errorCount}  Warnings: ${warnCount}`); process.exit(0) })
+  })
+
 // ── logs export ───────────────────────────────────────────
 program.command("export")
   .description("Export logs to JSON or CSV")
@@ -203,11 +255,25 @@ program.command("mcp")
   .option("--gemini", "Install into Gemini")
   .action(async (opts) => {
     if (opts.claude || opts.codex || opts.gemini) {
-      const bin = process.execPath
-      const script = new URL(import.meta.url).pathname
+      const { execSync } = await import("node:child_process")
+      // Resolve the MCP binary path — works from both source and dist
+      const selfPath = process.argv[1] ?? new URL(import.meta.url).pathname
+      const mcpBin = selfPath.replace(/cli\/index\.(ts|js)$/, "mcp/index.$1")
+      const runtime = process.execPath  // bun or node
+
       if (opts.claude) {
-        const { execSync } = await import("node:child_process")
-        execSync(`claude mcp add --transport stdio --scope user logs -- ${bin} ${script} mcp`, { stdio: "inherit" })
+        const cmd = `claude mcp add --transport stdio --scope user logs -- ${runtime} ${mcpBin}`
+        console.log(`Running: ${cmd}`)
+        execSync(cmd, { stdio: "inherit" })
+        console.log("✓ Installed logs-mcp into Claude Code")
+      }
+      if (opts.codex) {
+        const config = `[mcp_servers.logs]\ncommand = "${runtime}"\nargs = ["${mcpBin}"]`
+        console.log("Add to ~/.codex/config.toml:\n\n" + config)
+      }
+      if (opts.gemini) {
+        const config = JSON.stringify({ mcpServers: { logs: { command: runtime, args: [mcpBin] } } }, null, 2)
+        console.log("Add to ~/.gemini/settings.json mcpServers:\n\n" + config)
       }
       return
     }

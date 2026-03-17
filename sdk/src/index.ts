@@ -1,4 +1,4 @@
-import type { LogEntry, LogLevel, LogQuery, LogRow, LogSummary, Page, PerformanceSnapshot, Project, ScanJob } from "../../src/types/index.ts"
+import type { LogEntry, LogLevel, LogQuery, LogRow, LogSummary, Page, PerformanceSnapshot, Project, ScanJob } from "./types.ts"
 
 export type { LogEntry, LogLevel, LogQuery, LogRow, LogSummary, Page, PerformanceSnapshot, Project, ScanJob }
 
