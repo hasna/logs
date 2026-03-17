@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite"
 import { ingestBatch } from "./ingest.ts"
+import { getPageAuth } from "./page-auth.ts"
 import { saveSnapshot } from "./perf.ts"
 import { getPage, touchPage } from "./projects.ts"
 import type { LogEntry } from "../types/index.ts"
@@ -17,9 +18,27 @@ export async function scanPage(db: Database, projectId: string, pageId: string, 
 
   const { chromium } = await import("playwright")
   const browser = await chromium.launch({ headless: true })
-  const context = await browser.newContext({
+
+  // Apply page auth if configured
+  const auth = getPageAuth(db, pageId)
+  const contextOptions: Parameters<typeof browser.newContext>[0] = {
     userAgent: "Mozilla/5.0 (@hasna/logs scanner) AppleWebKit/537.36",
-  })
+  }
+  if (auth?.type === "cookie") {
+    try { contextOptions.storageState = JSON.parse(auth.credentials) } catch { /* invalid */ }
+  } else if (auth?.type === "basic") {
+    const [username, password] = auth.credentials.split(":")
+    contextOptions.httpCredentials = { username: username ?? "", password: password ?? "" }
+  }
+
+  const context = await browser.newContext(contextOptions)
+
+  if (auth?.type === "bearer") {
+    await context.route("**/*", (route) => {
+      route.continue({ headers: { ...route.request().headers(), Authorization: `Bearer ${auth.credentials}` } })
+    })
+  }
+
   const browserPage = await context.newPage()
 
   const collected: LogEntry[] = []

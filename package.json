@@ -1,6 +1,6 @@
 {
   "name": "@hasna/logs",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Log aggregation + browser script + headless page scanner + performance monitoring for AI agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,7 +21,15 @@
     "access": "restricted",
     "registry": "https://registry.npmjs.org/"
   },
-  "keywords": ["logs", "monitoring", "mcp", "ai-agents", "sentry", "performance", "lighthouse"],
+  "keywords": [
+    "logs",
+    "monitoring",
+    "mcp",
+    "ai-agents",
+    "sentry",
+    "performance",
+    "lighthouse"
+  ],
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "MIT",
   "dependencies": {

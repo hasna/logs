@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite"
 import cron from "node-cron"
 import { finishScanRun, createScanRun, listJobs, updateJob } from "./jobs.ts"
 import { listPages } from "./projects.ts"
+import { runRetentionAll } from "./retention.ts"
 import { scanPage } from "./scanner.ts"
 
 const tasks = new Map<string, cron.ScheduledTask>()
@@ -11,6 +12,11 @@ export function startScheduler(db: Database): void {
   for (const job of jobs) {
     scheduleJob(db, job.id, job.schedule, job.project_id, job.page_id ?? undefined)
   }
+  // Hourly retention runner
+  cron.schedule("0 * * * *", () => {
+    const result = runRetentionAll(db)
+    if (result.deleted > 0) console.log(`Retention: deleted ${result.deleted} logs across ${result.projects} project(s)`)
+  })
   console.log(`Scheduler started: ${tasks.size} job(s) active`)
 }
 

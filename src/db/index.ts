@@ -1,6 +1,10 @@
 import { Database } from "bun:sqlite"
 import { join } from "node:path"
 import { existsSync, mkdirSync } from "node:fs"
+import { migrateAlertRules } from "./migrations/001_alert_rules.ts"
+import { migrateIssues } from "./migrations/002_issues.ts"
+import { migrateRetention } from "./migrations/003_retention.ts"
+import { migratePageAuth } from "./migrations/004_page_auth.ts"
 
 const DATA_DIR = process.env.LOGS_DATA_DIR ?? join(process.env.HOME ?? "~", ".logs")
 const DB_PATH = process.env.LOGS_DB_PATH ?? join(DATA_DIR, "logs.db")
@@ -150,4 +154,10 @@ function migrate(db: Database): void {
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_perf_project_ts ON performance_snapshots(project_id, timestamp DESC)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_perf_page ON performance_snapshots(page_id)`)
+
+  // QoL migrations
+  migrateAlertRules(db)
+  migrateIssues(db)
+  migrateRetention(db)
+  migratePageAuth(db)
 }

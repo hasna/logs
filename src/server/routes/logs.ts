@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite"
 import { ingestBatch, ingestLog } from "../../lib/ingest.ts"
 import { getLogContext, searchLogs, tailLogs } from "../../lib/query.ts"
 import { summarizeLogs } from "../../lib/summarize.ts"
+import { exportToCsv, exportToJson } from "../../lib/export.ts"
 import type { LogEntry, LogLevel } from "../../types/index.ts"
 
 export function logsRoutes(db: Database) {
@@ -59,6 +60,26 @@ export function logsRoutes(db: Database) {
   app.get("/:trace_id/context", (c) => {
     const rows = getLogContext(db, c.req.param("trace_id"))
     return c.json(rows)
+  })
+
+  // GET /api/logs/export?format=json|csv&project_id=&since=&level=
+  app.get("/export", (c) => {
+    const { project_id, since, until, level, service, format, limit } = c.req.query()
+    const opts = { project_id: project_id || undefined, since: since || undefined, until: until || undefined, level: level || undefined, service: service || undefined, limit: limit ? Number(limit) : undefined }
+
+    if (format === "csv") {
+      c.header("Content-Type", "text/csv")
+      c.header("Content-Disposition", "attachment; filename=logs.csv")
+      const chunks: string[] = []
+      exportToCsv(db, opts, s => chunks.push(s))
+      return c.text(chunks.join(""))
+    }
+
+    c.header("Content-Type", "application/json")
+    c.header("Content-Disposition", "attachment; filename=logs.json")
+    const chunks: string[] = []
+    exportToJson(db, opts, s => chunks.push(s))
+    return c.text(chunks.join("\n"))
   })
 
   return app

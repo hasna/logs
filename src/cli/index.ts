@@ -151,6 +151,50 @@ program.command("scan")
     console.log("Scan complete.")
   })
 
+// ── logs export ───────────────────────────────────────────
+program.command("export")
+  .description("Export logs to JSON or CSV")
+  .option("--project <id>")
+  .option("--since <time>", "Relative time or ISO")
+  .option("--level <level>")
+  .option("--service <name>")
+  .option("--format <fmt>", "json or csv", "json")
+  .option("--output <file>", "Output file (default: stdout)")
+  .option("--limit <n>", "Max rows", "100000")
+  .action(async (opts) => {
+    const { exportToCsv, exportToJson } = await import("../lib/export.ts")
+    const { createWriteStream } = await import("node:fs")
+    const db = getDb()
+    const options = {
+      project_id: opts.project,
+      since: parseRelativeTime(opts.since),
+      level: opts.level,
+      service: opts.service,
+      limit: Number(opts.limit),
+    }
+    let count = 0
+    if (opts.output) {
+      const stream = createWriteStream(opts.output)
+      const write = (s: string) => stream.write(s)
+      count = opts.format === "csv" ? exportToCsv(db, options, write) : exportToJson(db, options, write)
+      stream.end()
+      console.error(`Exported ${count} log(s) to ${opts.output}`)
+    } else {
+      const write = (s: string) => process.stdout.write(s)
+      count = opts.format === "csv" ? exportToCsv(db, options, write) : exportToJson(db, options, write)
+      process.stderr.write(`\nExported ${count} log(s)\n`)
+    }
+  })
+
+// ── logs health ───────────────────────────────────────────
+program.command("health")
+  .description("Show server health and DB stats")
+  .action(async () => {
+    const { getHealth } = await import("../lib/health.ts")
+    const h = getHealth(getDb())
+    console.log(JSON.stringify(h, null, 2))
+  })
+
 // ── logs mcp / logs serve ─────────────────────────────────
 program.command("mcp")
   .description("Start the MCP server")

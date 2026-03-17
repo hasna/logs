@@ -3,11 +3,15 @@ import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { getDb } from "../db/index.ts"
 import { getBrowserScript } from "../lib/browser-script.ts"
+import { getHealth } from "../lib/health.ts"
 import { startScheduler } from "../lib/scheduler.ts"
+import { alertsRoutes } from "./routes/alerts.ts"
+import { issuesRoutes } from "./routes/issues.ts"
 import { jobsRoutes } from "./routes/jobs.ts"
 import { logsRoutes } from "./routes/logs.ts"
 import { perfRoutes } from "./routes/perf.ts"
 import { projectsRoutes } from "./routes/projects.ts"
+import { streamRoutes } from "./routes/stream.ts"
 
 const PORT = Number(process.env.LOGS_PORT ?? 3460)
 const db = getDb()
@@ -25,10 +29,14 @@ app.get("/script.js", (c) => {
 
 // API routes
 app.route("/api/logs", logsRoutes(db))
+app.route("/api/logs/stream", streamRoutes(db))
 app.route("/api/projects", projectsRoutes(db))
 app.route("/api/jobs", jobsRoutes(db))
+app.route("/api/alerts", alertsRoutes(db))
+app.route("/api/issues", issuesRoutes(db))
 app.route("/api/perf", perfRoutes(db))
 
+app.get("/health", (c) => c.json(getHealth(db)))
 app.get("/", (c) => c.json({ service: "@hasna/logs", port: PORT, status: "ok" }))
 
 // Start scheduler
