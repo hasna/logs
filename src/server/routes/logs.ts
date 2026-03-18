@@ -4,6 +4,9 @@ import { ingestBatch, ingestLog } from "../../lib/ingest.ts"
 import { getLogContext, searchLogs, tailLogs } from "../../lib/query.ts"
 import { summarizeLogs } from "../../lib/summarize.ts"
 import { exportToCsv, exportToJson } from "../../lib/export.ts"
+import { countLogs } from "../../lib/count.ts"
+import { parseTime } from "../../lib/parse-time.ts"
+import { resolveProjectId } from "../../lib/projects.ts"
 import type { LogEntry, LogLevel } from "../../types/index.ts"
 
 export function logsRoutes(db: Database) {
@@ -52,8 +55,32 @@ export function logsRoutes(db: Database) {
   // GET /api/logs/summary
   app.get("/summary", (c) => {
     const { project_id, since } = c.req.query()
-    const summary = summarizeLogs(db, project_id || undefined, since || undefined)
+    const summary = summarizeLogs(db, resolveProjectId(db, project_id) || undefined, parseTime(since) || since || undefined)
     return c.json(summary)
+  })
+
+  // GET /api/logs/count
+  app.get("/count", (c) => {
+    const { project_id, service, level, since, until } = c.req.query()
+    return c.json(countLogs(db, {
+      project_id: resolveProjectId(db, project_id) || undefined,
+      service: service || undefined,
+      level: level || undefined,
+      since: since || undefined,
+      until: until || undefined,
+    }))
+  })
+
+  // GET /api/logs/recent-errors
+  app.get("/recent-errors", (c) => {
+    const { project_id, since, limit } = c.req.query()
+    const rows = searchLogs(db, {
+      project_id: resolveProjectId(db, project_id) || undefined,
+      level: ["error", "fatal"],
+      since: parseTime(since || "1h"),
+      limit: limit ? Number(limit) : 20,
+    })
+    return c.json(rows.map(r => ({ id: r.id, timestamp: r.timestamp, level: r.level, message: r.message, service: r.service, age_seconds: Math.floor((Date.now() - new Date(r.timestamp).getTime()) / 1000) })))
   })
 
   // GET /api/logs/:trace_id/context

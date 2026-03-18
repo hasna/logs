@@ -54,6 +54,16 @@ export function getPage(db: Database, id: string): Page | null {
   return db.prepare("SELECT * FROM pages WHERE id = $id").get({ $id: id }) as Page | null
 }
 
+/** Resolves a project ID or name to a project ID. Returns null if not found or input is empty. */
+export function resolveProjectId(db: Database, idOrName: string | undefined | null): string | null {
+  if (!idOrName) return null
+  // Looks like a hex ID (8+ hex chars)
+  if (/^[0-9a-f]{8,}$/i.test(idOrName)) return idOrName
+  // Try name lookup (case-insensitive)
+  const p = db.prepare("SELECT id FROM projects WHERE LOWER(name) = LOWER($n)").get({ $n: idOrName }) as { id: string } | null
+  return p?.id ?? null
+}
+
 export function touchPage(db: Database, id: string): void {
   db.run("UPDATE pages SET last_scanned_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = $id", { $id: id })
 }

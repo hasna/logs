@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite"
 import type { LogQuery, LogRow } from "../types/index.ts"
+import { parseTime } from "./parse-time.ts"
 
 export function searchLogs(db: Database, q: LogQuery): LogRow[] {
   const conditions: string[] = []
@@ -9,8 +10,8 @@ export function searchLogs(db: Database, q: LogQuery): LogRow[] {
   if (q.page_id) { conditions.push("l.page_id = $page_id"); params.$page_id = q.page_id }
   if (q.service) { conditions.push("l.service = $service"); params.$service = q.service }
   if (q.trace_id) { conditions.push("l.trace_id = $trace_id"); params.$trace_id = q.trace_id }
-  if (q.since) { conditions.push("l.timestamp >= $since"); params.$since = q.since }
-  if (q.until) { conditions.push("l.timestamp <= $until"); params.$until = q.until }
+  if (q.since) { conditions.push("l.timestamp >= $since"); params.$since = parseTime(q.since) ?? q.since }
+  if (q.until) { conditions.push("l.timestamp <= $until"); params.$until = parseTime(q.until) ?? q.until }
 
   if (q.level) {
     const levels = Array.isArray(q.level) ? q.level : [q.level]
@@ -53,4 +54,11 @@ export function tailLogs(db: Database, projectId?: string, n = 50): LogRow[] {
 export function getLogContext(db: Database, traceId: string): LogRow[] {
   return db.prepare("SELECT * FROM logs WHERE trace_id = $t ORDER BY timestamp ASC")
     .all({ $t: traceId }) as LogRow[]
+}
+
+export function getLogContextFromId(db: Database, logId: string): LogRow[] {
+  const log = db.prepare("SELECT * FROM logs WHERE id = $id").get({ $id: logId }) as LogRow | null
+  if (!log) return []
+  if (log.trace_id) return getLogContext(db, log.trace_id)
+  return [log]
 }

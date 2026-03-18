@@ -3,11 +3,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
 import { getDb } from "../db/index.ts"
-import { ingestLog } from "../lib/ingest.ts"
-import { getLogContext, searchLogs, tailLogs } from "../lib/query.ts"
+import { ingestBatch, ingestLog } from "../lib/ingest.ts"
+import { getLogContext, getLogContextFromId, searchLogs, tailLogs } from "../lib/query.ts"
 import { summarizeLogs } from "../lib/summarize.ts"
+import { countLogs } from "../lib/count.ts"
 import { createJob, listJobs } from "../lib/jobs.ts"
-import { createPage, createProject, listPages, listProjects } from "../lib/projects.ts"
+import { createPage, createProject, listPages, listProjects, resolveProjectId } from "../lib/projects.ts"
 import { getLatestSnapshot, getPerfTrend, scoreLabel } from "../lib/perf.ts"
 import { createAlertRule, deleteAlertRule, listAlertRules } from "../lib/alerts.ts"
 import { listIssues, updateIssueStatus } from "../lib/issues.ts"
@@ -15,54 +16,80 @@ import { diagnose } from "../lib/diagnose.ts"
 import { compare } from "../lib/compare.ts"
 import { getHealth } from "../lib/health.ts"
 import { getSessionContext } from "../lib/session-context.ts"
+import { parseTime } from "../lib/parse-time.ts"
 import type { LogLevel, LogRow } from "../types/index.ts"
 
 const db = getDb()
-const server = new McpServer({ name: "logs", version: "0.1.0" })
+const server = new McpServer({ name: "logs", version: "0.3.0" })
 
 const BRIEF_FIELDS: (keyof LogRow)[] = ["id", "timestamp", "level", "message", "service"]
 
 function applyBrief(rows: LogRow[], brief = true): unknown[] {
   if (!brief) return rows
-  return rows.map(r => ({ id: r.id, timestamp: r.timestamp, level: r.level, message: r.message, service: r.service }))
+  return rows.map(r => ({
+    id: r.id,
+    timestamp: r.timestamp,
+    level: r.level,
+    message: r.message,
+    service: r.service,
+    age_seconds: Math.floor((Date.now() - new Date(r.timestamp).getTime()) / 1000),
+  }))
 }
 
-const TOOLS: Record<string, string> = {
-  register_project: "Register a project (name, github_repo?, base_url?, description?)",
-  register_page: "Register a page URL (project_id, url, path?, name?)",
-  create_scan_job: "Schedule page scans (project_id, schedule, page_id?)",
-  log_push: "Push a log entry (level, message, project_id?, service?, trace_id?, metadata?)",
-  log_search: "Search logs (project_id?, level?, since?, text?, brief?=true, limit?)",
-  log_tail: "Recent logs (project_id?, n?, brief?=true)",
-  log_summary: "Error/warn counts by service (project_id?, since?)",
-  log_context: "All logs for a trace_id (trace_id, brief?=true)",
-  log_diagnose: "Full diagnosis: top errors, failing pages, perf regressions (project_id, since?)",
-  log_compare: "Compare two time windows for new/resolved errors and perf delta",
-  perf_snapshot: "Latest perf snapshot (project_id, page_id?)",
-  perf_trend: "Perf over time (project_id, page_id?, since?, limit?)",
-  scan_status: "Last scan jobs (project_id?)",
-  list_projects: "List all projects",
-  list_pages: "List pages for a project (project_id)",
-  list_issues: "List grouped error issues (project_id?, status?, limit?)",
-  resolve_issue: "Update issue status (id, status: open|resolved|ignored)",
-  create_alert_rule: "Create alert rule (project_id, name, level, threshold_count, window_seconds, webhook_url?)",
-  list_alert_rules: "List alert rules (project_id?)",
-  delete_alert_rule: "Delete alert rule (id)",
-  log_session_context: "Logs + session metadata for a session_id (requires SESSIONS_URL env)",
-  get_health: "Server health + DB stats",
-  search_tools: "Search tools by keyword (query)",
-  describe_tools: "List all tools",
+function rp(idOrName?: string): string | undefined {
+  if (!idOrName) return undefined
+  return resolveProjectId(db, idOrName) ?? idOrName
+}
+
+// Tool registry with param signatures for discoverability
+const TOOLS: Record<string, { desc: string; params: string }> = {
+  register_project:        { desc: "Register a project", params: "(name, github_repo?, base_url?, description?)" },
+  register_page:           { desc: "Register a page URL to a project", params: "(project_id, url, path?, name?)" },
+  create_scan_job:         { desc: "Schedule headless page scans", params: "(project_id, schedule, page_id?)" },
+  resolve_project:         { desc: "Resolve project name to ID", params: "(name)" },
+  log_push:                { desc: "Push a single log entry", params: "(level, message, project_id?, service?, trace_id?, metadata?)" },
+  log_push_batch:          { desc: "Push multiple log entries in one call", params: "(entries: Array<{level, message, project_id?, service?, trace_id?}>)" },
+  log_search:              { desc: "Search logs", params: "(project_id?, level?, since?, until?, text?, service?, limit?=100, brief?=true)" },
+  log_tail:                { desc: "Get N most recent logs", params: "(project_id?, n?=50, brief?=true)" },
+  log_count:               { desc: "Count logs — zero token cost, pure signal", params: "(project_id?, service?, level?, since?, until?)" },
+  log_recent_errors:       { desc: "Shortcut: recent errors + fatals", params: "(project_id?, since?='1h', limit?=20)" },
+  log_summary:             { desc: "Error/warn counts by service", params: "(project_id?, since?)" },
+  log_context:             { desc: "All logs for a trace_id", params: "(trace_id, brief?=true)" },
+  log_context_from_id:     { desc: "Trace context from a log ID (no trace_id needed)", params: "(log_id, brief?=true)" },
+  log_diagnose:            { desc: "Full diagnosis: score, top errors, failing pages, perf regressions", params: "(project_id, since?='24h', include?=['top_errors','error_rate','failing_pages','perf'])" },
+  log_compare:             { desc: "Diff two time windows for new/resolved errors", params: "(project_id, a_since, a_until, b_since, b_until)" },
+  log_session_context:     { desc: "Logs + session metadata for a session_id", params: "(session_id, brief?=true)" },
+  perf_snapshot:           { desc: "Latest performance snapshot", params: "(project_id, page_id?)" },
+  perf_trend:              { desc: "Performance over time", params: "(project_id, page_id?, since?, limit?=50)" },
+  scan_status:             { desc: "Last scan jobs", params: "(project_id?)" },
+  list_projects:           { desc: "List all projects", params: "()" },
+  list_pages:              { desc: "List pages for a project", params: "(project_id)" },
+  list_issues:             { desc: "List grouped error issues", params: "(project_id?, status?, limit?=50)" },
+  resolve_issue:           { desc: "Update issue status", params: "(id, status: open|resolved|ignored)" },
+  create_alert_rule:       { desc: "Create alert rule", params: "(project_id, name, level?, threshold_count?, window_seconds?, webhook_url?)" },
+  list_alert_rules:        { desc: "List alert rules", params: "(project_id?)" },
+  delete_alert_rule:       { desc: "Delete alert rule", params: "(id)" },
+  get_health:              { desc: "Server health + DB stats", params: "()" },
+  search_tools:            { desc: "Search tools by keyword — returns names, descriptions, param signatures", params: "(query)" },
+  describe_tools:          { desc: "List all tools with descriptions and param signatures", params: "()" },
 }
 
 server.tool("search_tools", { query: z.string() }, ({ query }) => {
   const q = query.toLowerCase()
-  const matches = Object.entries(TOOLS).filter(([k, v]) => k.includes(q) || v.toLowerCase().includes(q))
-  return { content: [{ type: "text", text: matches.map(([k, v]) => `${k}: ${v}`).join("\n") || "No matches" }] }
+  const matches = Object.entries(TOOLS).filter(([k, v]) => k.includes(q) || v.desc.toLowerCase().includes(q))
+  const text = matches.map(([k, v]) => `${k}${v.params} — ${v.desc}`).join("\n") || "No matches"
+  return { content: [{ type: "text", text }] }
 })
 
 server.tool("describe_tools", {}, () => ({
-  content: [{ type: "text", text: Object.entries(TOOLS).map(([k, v]) => `${k}: ${v}`).join("\n") }]
+  content: [{ type: "text", text: Object.entries(TOOLS).map(([k, v]) => `${k}${v.params} — ${v.desc}`).join("\n") }]
 }))
+
+server.tool("resolve_project", { name: z.string() }, ({ name }) => {
+  const id = resolveProjectId(db, name)
+  const project = id ? db.prepare("SELECT * FROM projects WHERE id = $id").get({ $id: id }) : null
+  return { content: [{ type: "text", text: JSON.stringify(project ?? { error: `Project '${name}' not found` }) }] }
+})
 
 server.tool("register_project", {
   name: z.string(), github_repo: z.string().optional(), base_url: z.string().optional(), description: z.string().optional(),
@@ -70,25 +97,34 @@ server.tool("register_project", {
 
 server.tool("register_page", {
   project_id: z.string(), url: z.string(), path: z.string().optional(), name: z.string().optional(),
-}, (args) => ({ content: [{ type: "text", text: JSON.stringify(createPage(db, args)) }] }))
+}, (args) => ({ content: [{ type: "text", text: JSON.stringify(createPage(db, { ...args, project_id: rp(args.project_id) ?? args.project_id })) }] }))
 
 server.tool("create_scan_job", {
   project_id: z.string(), schedule: z.string(), page_id: z.string().optional(),
-}, (args) => ({ content: [{ type: "text", text: JSON.stringify(createJob(db, args)) }] }))
+}, (args) => ({ content: [{ type: "text", text: JSON.stringify(createJob(db, { ...args, project_id: rp(args.project_id) ?? args.project_id })) }] }))
 
 server.tool("log_push", {
   level: z.enum(["debug", "info", "warn", "error", "fatal"]),
   message: z.string(),
-  project_id: z.string().optional(),
-  service: z.string().optional(),
-  trace_id: z.string().optional(),
-  session_id: z.string().optional(),
-  agent: z.string().optional(),
-  url: z.string().optional(),
+  project_id: z.string().optional(), service: z.string().optional(),
+  trace_id: z.string().optional(), session_id: z.string().optional(),
+  agent: z.string().optional(), url: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
 }, (args) => {
-  const row = ingestLog(db, args)
+  const row = ingestLog(db, { ...args, project_id: rp(args.project_id) })
   return { content: [{ type: "text", text: `Logged: ${row.id}` }] }
+})
+
+server.tool("log_push_batch", {
+  entries: z.array(z.object({
+    level: z.enum(["debug", "info", "warn", "error", "fatal"]),
+    message: z.string(),
+    project_id: z.string().optional(), service: z.string().optional(),
+    trace_id: z.string().optional(), metadata: z.record(z.unknown()).optional(),
+  })),
+}, ({ entries }) => {
+  const rows = ingestBatch(db, entries.map(e => ({ ...e, project_id: rp(e.project_id) })))
+  return { content: [{ type: "text", text: `Logged ${rows.length} entries` }] }
 })
 
 server.tool("log_search", {
@@ -98,34 +134,66 @@ server.tool("log_search", {
   text: z.string().optional(), trace_id: z.string().optional(),
   limit: z.number().optional(), brief: z.boolean().optional(),
 }, (args) => {
-  const rows = searchLogs(db, { ...args, level: args.level ? (args.level.split(",") as LogLevel[]) : undefined })
+  const rows = searchLogs(db, {
+    ...args,
+    project_id: rp(args.project_id),
+    level: args.level ? (args.level.split(",") as LogLevel[]) : undefined,
+    since: parseTime(args.since) ?? args.since,
+    until: parseTime(args.until) ?? args.until,
+  })
   return { content: [{ type: "text", text: JSON.stringify(applyBrief(rows, args.brief !== false)) }] }
 })
 
 server.tool("log_tail", {
   project_id: z.string().optional(), n: z.number().optional(), brief: z.boolean().optional(),
 }, ({ project_id, n, brief }) => {
-  const rows = tailLogs(db, project_id, n ?? 50)
+  const rows = tailLogs(db, rp(project_id), n ?? 50)
   return { content: [{ type: "text", text: JSON.stringify(applyBrief(rows, brief !== false)) }] }
+})
+
+server.tool("log_count", {
+  project_id: z.string().optional(), service: z.string().optional(),
+  level: z.string().optional(), since: z.string().optional(), until: z.string().optional(),
+}, (args) => ({
+  content: [{ type: "text", text: JSON.stringify(countLogs(db, { ...args, project_id: rp(args.project_id) })) }]
+}))
+
+server.tool("log_recent_errors", {
+  project_id: z.string().optional(), since: z.string().optional(), limit: z.number().optional(),
+}, ({ project_id, since, limit }) => {
+  const rows = searchLogs(db, {
+    project_id: rp(project_id),
+    level: ["error", "fatal"],
+    since: parseTime(since ?? "1h"),
+    limit: limit ?? 20,
+  })
+  return { content: [{ type: "text", text: JSON.stringify(applyBrief(rows, true)) }] }
 })
 
 server.tool("log_summary", {
   project_id: z.string().optional(), since: z.string().optional(),
 }, ({ project_id, since }) => ({
-  content: [{ type: "text", text: JSON.stringify(summarizeLogs(db, project_id, since)) }]
+  content: [{ type: "text", text: JSON.stringify(summarizeLogs(db, rp(project_id), parseTime(since) ?? since)) }]
 }))
 
 server.tool("log_context", {
   trace_id: z.string(), brief: z.boolean().optional(),
-}, ({ trace_id, brief }) => {
-  const rows = getLogContext(db, trace_id)
-  return { content: [{ type: "text", text: JSON.stringify(applyBrief(rows, brief !== false)) }] }
-})
+}, ({ trace_id, brief }) => ({
+  content: [{ type: "text", text: JSON.stringify(applyBrief(getLogContext(db, trace_id), brief !== false)) }]
+}))
+
+server.tool("log_context_from_id", {
+  log_id: z.string(), brief: z.boolean().optional(),
+}, ({ log_id, brief }) => ({
+  content: [{ type: "text", text: JSON.stringify(applyBrief(getLogContextFromId(db, log_id), brief !== false)) }]
+}))
 
 server.tool("log_diagnose", {
-  project_id: z.string(), since: z.string().optional(),
-}, ({ project_id, since }) => ({
-  content: [{ type: "text", text: JSON.stringify(diagnose(db, project_id, since)) }]
+  project_id: z.string(),
+  since: z.string().optional(),
+  include: z.array(z.enum(["top_errors", "error_rate", "failing_pages", "perf"])).optional(),
+}, ({ project_id, since, include }) => ({
+  content: [{ type: "text", text: JSON.stringify(diagnose(db, rp(project_id) ?? project_id, since, include)) }]
 }))
 
 server.tool("log_compare", {
@@ -133,26 +201,35 @@ server.tool("log_compare", {
   a_since: z.string(), a_until: z.string(),
   b_since: z.string(), b_until: z.string(),
 }, ({ project_id, a_since, a_until, b_since, b_until }) => ({
-  content: [{ type: "text", text: JSON.stringify(compare(db, project_id, a_since, a_until, b_since, b_until)) }]
+  content: [{ type: "text", text: JSON.stringify(compare(db, rp(project_id) ?? project_id,
+    parseTime(a_since) ?? a_since, parseTime(a_until) ?? a_until,
+    parseTime(b_since) ?? b_since, parseTime(b_until) ?? b_until)) }]
 }))
+
+server.tool("log_session_context", {
+  session_id: z.string(), brief: z.boolean().optional(),
+}, async ({ session_id, brief }) => {
+  const ctx = await getSessionContext(db, session_id)
+  return { content: [{ type: "text", text: JSON.stringify({ ...ctx, logs: applyBrief(ctx.logs, brief !== false) }) }] }
+})
 
 server.tool("perf_snapshot", {
   project_id: z.string(), page_id: z.string().optional(),
 }, ({ project_id, page_id }) => {
-  const snap = getLatestSnapshot(db, project_id, page_id)
+  const snap = getLatestSnapshot(db, rp(project_id) ?? project_id, page_id)
   return { content: [{ type: "text", text: JSON.stringify(snap ? { ...snap, label: scoreLabel(snap.score) } : null) }] }
 })
 
 server.tool("perf_trend", {
   project_id: z.string(), page_id: z.string().optional(), since: z.string().optional(), limit: z.number().optional(),
 }, ({ project_id, page_id, since, limit }) => ({
-  content: [{ type: "text", text: JSON.stringify(getPerfTrend(db, project_id, page_id, since, limit ?? 50)) }]
+  content: [{ type: "text", text: JSON.stringify(getPerfTrend(db, rp(project_id) ?? project_id, page_id, parseTime(since) ?? since, limit ?? 50)) }]
 }))
 
 server.tool("scan_status", {
   project_id: z.string().optional(),
 }, ({ project_id }) => ({
-  content: [{ type: "text", text: JSON.stringify(listJobs(db, project_id)) }]
+  content: [{ type: "text", text: JSON.stringify(listJobs(db, rp(project_id))) }]
 }))
 
 server.tool("list_projects", {}, () => ({
@@ -160,13 +237,13 @@ server.tool("list_projects", {}, () => ({
 }))
 
 server.tool("list_pages", { project_id: z.string() }, ({ project_id }) => ({
-  content: [{ type: "text", text: JSON.stringify(listPages(db, project_id)) }]
+  content: [{ type: "text", text: JSON.stringify(listPages(db, rp(project_id) ?? project_id)) }]
 }))
 
 server.tool("list_issues", {
   project_id: z.string().optional(), status: z.string().optional(), limit: z.number().optional(),
 }, ({ project_id, status, limit }) => ({
-  content: [{ type: "text", text: JSON.stringify(listIssues(db, project_id, status, limit ?? 50)) }]
+  content: [{ type: "text", text: JSON.stringify(listIssues(db, rp(project_id), status, limit ?? 50)) }]
 }))
 
 server.tool("resolve_issue", {
@@ -180,25 +257,17 @@ server.tool("create_alert_rule", {
   level: z.string().optional(), service: z.string().optional(),
   threshold_count: z.number().optional(), window_seconds: z.number().optional(),
   action: z.enum(["webhook", "log"]).optional(), webhook_url: z.string().optional(),
-}, (args) => ({ content: [{ type: "text", text: JSON.stringify(createAlertRule(db, args)) }] }))
+}, (args) => ({ content: [{ type: "text", text: JSON.stringify(createAlertRule(db, { ...args, project_id: rp(args.project_id) ?? args.project_id })) }] }))
 
 server.tool("list_alert_rules", {
   project_id: z.string().optional(),
 }, ({ project_id }) => ({
-  content: [{ type: "text", text: JSON.stringify(listAlertRules(db, project_id)) }]
+  content: [{ type: "text", text: JSON.stringify(listAlertRules(db, rp(project_id))) }]
 }))
 
 server.tool("delete_alert_rule", { id: z.string() }, ({ id }) => {
   deleteAlertRule(db, id)
   return { content: [{ type: "text", text: "deleted" }] }
-})
-
-server.tool("log_session_context", {
-  session_id: z.string(),
-  brief: z.boolean().optional(),
-}, async ({ session_id, brief }) => {
-  const ctx = await getSessionContext(db, session_id)
-  return { content: [{ type: "text", text: JSON.stringify({ ...ctx, logs: applyBrief(ctx.logs, brief !== false) }) }] }
 })
 
 server.tool("get_health", {}, () => ({
