@@ -300,5 +300,26 @@ server.tool("get_health", {}, () => ({
   content: [{ type: "text", text: JSON.stringify(getHealth(db)) }]
 }))
 
+server.tool("log_stats", {
+  project_id: z.string().optional().describe("Project name or ID (scope stats to a project)"),
+}, (args) => {
+  const projectId = rp(args.project_id)
+  const pFilter = projectId ? `WHERE project_id = ?` : ""
+  const pAnd = projectId ? `AND project_id = ?` : ""
+  const pParam = projectId ? [projectId] : []
+
+  const total = (db.query(`SELECT COUNT(*) as c FROM logs ${pFilter}`).get(...pParam) as { c: number }).c
+  const oldest = (db.query(`SELECT MIN(timestamp) as t FROM logs ${pFilter}`).get(...pParam) as { t: string | null }).t
+  const newest = (db.query(`SELECT MAX(timestamp) as t FROM logs ${pFilter}`).get(...pParam) as { t: string | null }).t
+  const byLevel = db.query(`SELECT level, COUNT(*) as c FROM logs ${pFilter} GROUP BY level ORDER BY c DESC`).all(...pParam) as { level: string; c: number }[]
+  const topServices = db.query(`SELECT COALESCE(service, '-') as service, COUNT(*) as c FROM logs ${pFilter} GROUP BY service ORDER BY c DESC LIMIT 5`).all(...pParam) as { service: string; c: number }[]
+  const days = db.query(`SELECT strftime('%Y-%m-%d', timestamp) as day, COUNT(*) as c FROM logs WHERE timestamp >= datetime('now', '-7 days') ${pAnd} GROUP BY day ORDER BY day`).all(...pParam) as { day: string; c: number }[]
+  const errors = (byLevel.find(r => r.level === "error")?.c ?? 0) + (byLevel.find(r => r.level === "fatal")?.c ?? 0)
+  const error_rate_pct = total > 0 ? parseFloat(((errors / total) * 100).toFixed(2)) : 0
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify({ total, oldest, newest, by_level: Object.fromEntries(byLevel.map(r => [r.level, r.c])), top_services: topServices, last_7_days: days, error_rate_pct }) }]
+  }
+})
+
 const transport = new StdioServerTransport()
 await server.connect(transport)

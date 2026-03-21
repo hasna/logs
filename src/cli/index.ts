@@ -346,6 +346,63 @@ program.command("export")
     }
   })
 
+// ── logs stats ────────────────────────────────────────────
+program.command("stats")
+  .description("Volume overview: count, DB size, timeline, top services, error rate")
+  .option("--project <name|id>", "Scope to a project")
+  .action((opts) => {
+    const db = getDb()
+    const projectId = resolveProject(opts.project)
+    const pFilter = projectId ? `WHERE project_id = '${projectId.replace(/'/g, "''")}'` : ""
+    const pAnd = projectId ? `AND project_id = '${projectId.replace(/'/g, "''")}'` : ""
+
+    const total = (db.query(`SELECT COUNT(*) as c FROM logs ${pFilter}`).get() as { c: number }).c
+    const oldest = (db.query(`SELECT MIN(timestamp) as t FROM logs ${pFilter}`).get() as { t: string | null }).t
+    const newest = (db.query(`SELECT MAX(timestamp) as t FROM logs ${pFilter}`).get() as { t: string | null }).t
+
+    const byLevel = db.query(`SELECT level, COUNT(*) as c FROM logs ${pFilter} GROUP BY level ORDER BY c DESC`)
+      .all() as { level: string; c: number }[]
+
+    const topServices = db.query(
+      `SELECT COALESCE(service, '-') as service, COUNT(*) as c FROM logs ${pFilter} GROUP BY service ORDER BY c DESC LIMIT 5`
+    ).all() as { service: string; c: number }[]
+
+    // Last 7 days histogram
+    const days = db.query(
+      `SELECT strftime('%Y-%m-%d', timestamp) as day, COUNT(*) as c FROM logs WHERE timestamp >= datetime('now', '-7 days') ${pAnd} GROUP BY day ORDER BY day`
+    ).all() as { day: string; c: number }[]
+
+    const errors = byLevel.find(r => r.level === "error")?.c ?? 0
+    const fatals = byLevel.find(r => r.level === "fatal")?.c ?? 0
+    const errorRate = total > 0 ? (((errors + fatals) / total) * 100).toFixed(2) : "0.00"
+
+    console.log(`\n${C.bold}Log Volume Stats${C.reset}${projectId ? ` [${opts.project}]` : ""}`)
+    console.log(`  Total:      ${total.toLocaleString()}`)
+    console.log(`  Oldest:     ${oldest?.slice(0, 19) ?? "-"}`)
+    console.log(`  Newest:     ${newest?.slice(0, 19) ?? "-"}`)
+    console.log(`  Error rate: ${errorRate}%  (${errors} errors, ${fatals} fatals)`)
+
+    if (byLevel.length) {
+      console.log(`\n${C.bold}By Level:${C.reset}`)
+      for (const r of byLevel) console.log(`  ${colorLevel(r.level)}  ${r.c.toLocaleString()}`)
+    }
+
+    if (topServices.length) {
+      console.log(`\n${C.bold}Top Services:${C.reset}`)
+      for (const r of topServices) console.log(`  ${C.cyan}${pad(r.service, 20)}${C.reset}  ${r.c.toLocaleString()}`)
+    }
+
+    if (days.length) {
+      const maxC = Math.max(...days.map(d => d.c))
+      console.log(`\n${C.bold}Last 7 Days:${C.reset}`)
+      for (const d of days) {
+        const bar = "█".repeat(Math.max(1, Math.round((d.c / maxC) * 20)))
+        console.log(`  ${d.day}  ${C.cyan}${bar}${C.reset}  ${d.c.toLocaleString()}`)
+      }
+    }
+    console.log("")
+  })
+
 // ── logs health ───────────────────────────────────────────
 program.command("health")
   .description("Show server health and DB stats")
