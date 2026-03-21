@@ -191,9 +191,11 @@ server.tool("log_context", {
 }))
 
 server.tool("log_context_from_id", {
-  log_id: z.string(), brief: z.boolean().optional(),
-}, ({ log_id, brief }) => ({
-  content: [{ type: "text", text: JSON.stringify(applyBrief(getLogContextFromId(db, log_id), brief !== false)) }]
+  log_id: z.string(),
+  brief: z.boolean().optional(),
+  window: z.number().int().min(0).optional().describe("Return N logs before and after the target log's timestamp (in addition to trace context)"),
+}, ({ log_id, brief, window }) => ({
+  content: [{ type: "text", text: JSON.stringify(applyBrief(getLogContextFromId(db, log_id, window ?? 0), brief !== false)) }]
 }))
 
 server.tool("log_export", {

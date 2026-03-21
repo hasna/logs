@@ -56,9 +56,29 @@ export function getLogContext(db: Database, traceId: string): LogRow[] {
     .all({ $t: traceId }) as LogRow[]
 }
 
-export function getLogContextFromId(db: Database, logId: string): LogRow[] {
+export function getLogContextFromId(db: Database, logId: string, window = 0): LogRow[] {
   const log = db.prepare("SELECT * FROM logs WHERE id = $id").get({ $id: logId }) as LogRow | null
   if (!log) return []
-  if (log.trace_id) return getLogContext(db, log.trace_id)
-  return [log]
+
+  // Get trace context (or just the log itself if no trace)
+  const trace: LogRow[] = log.trace_id ? getLogContext(db, log.trace_id) : [log]
+
+  if (window <= 0) return trace
+
+  // Fetch N rows before and after the target log's timestamp
+  const before = db.prepare(
+    `SELECT * FROM logs WHERE id != $id AND timestamp <= $ts ORDER BY timestamp DESC LIMIT $n`
+  ).all({ $id: logId, $ts: log.timestamp, $n: window }) as LogRow[]
+
+  const after = db.prepare(
+    `SELECT * FROM logs WHERE id != $id AND timestamp > $ts ORDER BY timestamp ASC LIMIT $n`
+  ).all({ $id: logId, $ts: log.timestamp, $n: window }) as LogRow[]
+
+  // Merge: before (oldest first) + trace + after, deduplicate by id
+  const seen = new Set<string>()
+  const merged: LogRow[] = []
+  for (const row of [...before.reverse(), ...trace, ...after]) {
+    if (!seen.has(row.id)) { seen.add(row.id); merged.push(row) }
+  }
+  return merged.sort((a, b) => a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0)
 }
