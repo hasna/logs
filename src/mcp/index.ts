@@ -13,6 +13,7 @@ import { getLatestSnapshot, getPerfTrend, scoreLabel } from "../lib/perf.ts"
 import { createAlertRule, deleteAlertRule, listAlertRules } from "../lib/alerts.ts"
 import { listIssues, updateIssueStatus } from "../lib/issues.ts"
 import { diagnose } from "../lib/diagnose.ts"
+import { exportToJson, exportToCsv } from "../lib/export.ts"
 import { compare } from "../lib/compare.ts"
 import { getHealth } from "../lib/health.ts"
 import { getSessionContext } from "../lib/session-context.ts"
@@ -188,6 +189,30 @@ server.tool("log_context_from_id", {
 }, ({ log_id, brief }) => ({
   content: [{ type: "text", text: JSON.stringify(applyBrief(getLogContextFromId(db, log_id), brief !== false)) }]
 }))
+
+server.tool("log_export", {
+  project_id: z.string().optional().describe("Project name or ID"),
+  format: z.enum(["json", "csv"]).optional().default("json").describe("Output format"),
+  since: z.string().optional().describe("Since time (1h, 24h, 7d, ISO)"),
+  until: z.string().optional(),
+  level: z.array(z.string()).optional().describe("Filter by levels"),
+  service: z.string().optional(),
+  limit: z.number().optional().default(100000),
+}, (args) => {
+  const chunks: string[] = []
+  const write = (s: string) => { chunks.push(s); return true }
+  const options = {
+    project_id: rp(args.project_id),
+    level: args.level as never,
+    service: args.service,
+    since: args.since,
+    until: args.until,
+    limit: args.limit ?? 100000,
+  }
+  if (args.format === "csv") exportToCsv(db, options, write)
+  else exportToJson(db, options, write)
+  return { content: [{ type: "text" as const, text: chunks.join("") }] }
+})
 
 server.tool("log_diagnose", {
   project_id: z.string(),
