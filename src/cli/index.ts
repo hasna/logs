@@ -278,6 +278,39 @@ program.command("watch")
     process.on("SIGINT", () => { clearInterval(interval); console.log(`\n\nErrors: ${errorCount}  Warnings: ${warnCount}`); process.exit(0) })
   })
 
+// ── logs count ────────────────────────────────────────────
+program.command("count")
+  .description("Count logs with optional breakdown by level or service")
+  .option("--project <name|id>", "Project name or ID")
+  .option("--service <name>", "Filter by service")
+  .option("--level <level>", "Filter by level")
+  .option("--since <time>", "Since (1h, 24h, 7d)")
+  .option("--until <time>", "Until")
+  .option("--group-by <field>", "Breakdown: level | service")
+  .action(async (opts) => {
+    const { countLogs } = await import("../lib/count.ts")
+    const result = countLogs(getDb(), {
+      project_id: resolveProject(opts.project),
+      service: opts.service,
+      level: opts.level,
+      since: opts.since,
+      until: opts.until,
+      group_by: opts.groupBy as "level" | "service" | undefined,
+    })
+    console.log(`Total: ${result.total}  ${C.red}Errors: ${result.errors}${C.reset}  ${C.yellow}Warns: ${result.warns}${C.reset}  Fatals: ${result.fatals}`)
+    if (result.by_service) {
+      console.log(`\nBy Service:`)
+      for (const [svc, cnt] of Object.entries(result.by_service)) {
+        console.log(`  ${C.cyan}${pad(svc, 20)}${C.reset}  ${cnt}`)
+      }
+    } else if (opts.groupBy === "level") {
+      console.log(`\nBy Level:`)
+      for (const [lvl, cnt] of Object.entries(result.by_level)) {
+        console.log(`  ${colorLevel(lvl)}  ${cnt}`)
+      }
+    }
+  })
+
 // ── logs export ───────────────────────────────────────────
 program.command("export")
   .description("Export logs to JSON or CSV")

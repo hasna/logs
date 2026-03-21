@@ -154,6 +154,7 @@ server.tool("log_tail", {
 server.tool("log_count", {
   project_id: z.string().optional(), service: z.string().optional(),
   level: z.string().optional(), since: z.string().optional(), until: z.string().optional(),
+  group_by: z.enum(["level", "service"]).optional().describe("Return breakdown by 'level' or 'service' in addition to totals"),
 }, (args) => ({
   content: [{ type: "text", text: JSON.stringify(countLogs(db, { ...args, project_id: rp(args.project_id) })) }]
 }))

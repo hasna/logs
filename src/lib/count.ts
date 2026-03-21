@@ -7,6 +7,7 @@ export interface LogCount {
   warns: number
   fatals: number
   by_level: Record<string, number>
+  by_service?: Record<string, number>
 }
 
 export function countLogs(db: Database, opts: {
@@ -15,6 +16,7 @@ export function countLogs(db: Database, opts: {
   level?: string
   since?: string
   until?: string
+  group_by?: "level" | "service"
 }): LogCount {
   const conditions: string[] = []
   const params: Record<string, unknown> = {}
@@ -35,11 +37,19 @@ export function countLogs(db: Database, opts: {
   const by_level = Object.fromEntries(byLevel.map(r => [r.level, r.c]))
   const total = byLevel.reduce((s, r) => s + r.c, 0)
 
+  let by_service: Record<string, number> | undefined
+  if (opts.group_by === "service") {
+    const bySvc = db.prepare(`SELECT COALESCE(service, '-') as service, COUNT(*) as c FROM logs ${where} GROUP BY service ORDER BY c DESC`)
+      .all(params) as { service: string; c: number }[]
+    by_service = Object.fromEntries(bySvc.map(r => [r.service, r.c]))
+  }
+
   return {
     total,
     errors: by_level["error"] ?? 0,
     warns: by_level["warn"] ?? 0,
     fatals: by_level["fatal"] ?? 0,
     by_level,
+    by_service,
   }
 }
