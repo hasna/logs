@@ -37,7 +37,11 @@ export function ingestLog(db: Database, entry: LogEntry): LogRow {
   return row
 }
 
-export function ingestBatch(db: Database, entries: LogEntry[]): LogRow[] {
+export function ingestBatch(db: Database, entries: LogEntry[], sharedTraceId?: string | null): LogRow[] {
+  // Apply shared trace_id to entries that don't have their own
+  if (sharedTraceId) {
+    entries = entries.map(e => e.trace_id ? e : { ...e, trace_id: sharedTraceId })
+  }
   const insert = db.prepare(`
     INSERT INTO logs (project_id, page_id, level, source, service, message, trace_id, session_id, agent, url, stack_trace, metadata)
     VALUES ($project_id, $page_id, $level, $source, $service, $message, $trace_id, $session_id, $agent, $url, $stack_trace, $metadata)

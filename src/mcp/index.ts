@@ -123,9 +123,15 @@ server.tool("log_push_batch", {
     project_id: z.string().optional(), service: z.string().optional(),
     trace_id: z.string().optional(), metadata: z.record(z.unknown()).optional(),
   })),
-}, ({ entries }) => {
-  const rows = ingestBatch(db, entries.map(e => ({ ...e, project_id: rp(e.project_id) })))
-  return { content: [{ type: "text", text: `Logged ${rows.length} entries` }] }
+  trace_id: z.string().optional().describe("Shared trace_id applied to all entries that don't have their own trace_id"),
+  project_id: z.string().optional().describe("Shared project_id applied to all entries (individual entry project_id takes precedence)"),
+}, ({ entries, trace_id, project_id }) => {
+  const mapped = entries.map(e => ({
+    ...e,
+    project_id: rp(e.project_id ?? project_id),
+  }))
+  const rows = ingestBatch(db, mapped, trace_id)
+  return { content: [{ type: "text", text: `Logged ${rows.length} entries${trace_id ? ` (trace: ${trace_id})` : ''}` }] }
 })
 
 server.tool("log_search", {
