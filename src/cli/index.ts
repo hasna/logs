@@ -49,18 +49,21 @@ program.command("list")
   .option("--level <levels>", "Comma-separated levels (error,warn,info,debug,fatal)")
   .option("--service <name>", "Filter by service")
   .option("--since <iso>", "Since timestamp or relative (1h, 24h, 7d)")
+  .option("--until <iso>", "Until timestamp or relative (e.g. logs list --since 2h --until 1h)")
   .option("--text <query>", "Full-text search")
   .option("--limit <n>", "Max results", "100")
   .option("--format <fmt>", "Output format: table|json|compact", "table")
   .action((opts) => {
     const db = getDb()
     const since = parseRelativeTime(opts.since)
+    const until = parseRelativeTime(opts.until)
     const rows = searchLogs(db, {
       project_id: resolveProject(opts.project),
       page_id: opts.page,
       level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
       service: opts.service,
       since,
+      until,
       text: opts.text,
       limit: Number(opts.limit),
     })
@@ -91,8 +94,9 @@ program.command("summary")
   .description("Error/warn summary by service")
   .option("--project <name|id>", "Project name or ID")
   .option("--since <time>", "Relative time (1h, 24h, 7d)", "24h")
+  .option("--until <time>", "Upper bound time")
   .action((opts) => {
-    const summary = summarizeLogs(getDb(), resolveProject(opts.project), parseRelativeTime(opts.since))
+    const summary = summarizeLogs(getDb(), resolveProject(opts.project), parseRelativeTime(opts.since), parseRelativeTime(opts.until))
     if (!summary.length) { console.log("No errors/warnings in this window."); return }
     for (const s of summary) console.log(`${colorLevel(s.level)} ${C.cyan}${pad(s.service ?? "-", 15)}${C.reset} count=${s.count} latest=${s.latest}`)
   })
