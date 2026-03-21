@@ -5,9 +5,15 @@ import { ingestLog } from "../lib/ingest.ts"
 import { searchLogs, tailLogs } from "../lib/query.ts"
 import { summarizeLogs } from "../lib/summarize.ts"
 import { createJob, listJobs } from "../lib/jobs.ts"
-import { createPage, createProject, listPages, listProjects } from "../lib/projects.ts"
+import { createPage, createProject, listPages, listProjects, resolveProjectId } from "../lib/projects.ts"
 import { runJob } from "../lib/scheduler.ts"
 import type { LogLevel } from "../types/index.ts"
+
+/** Resolve a project name or ID from CLI --project flag */
+function resolveProject(nameOrId: string | undefined): string | undefined {
+  if (!nameOrId) return undefined;
+  return resolveProjectId(getDb(), nameOrId) ?? nameOrId;
+}
 
 const program = new Command()
   .name("logs")
@@ -17,7 +23,7 @@ const program = new Command()
 // ── logs list ──────────────────────────────────────────────
 program.command("list")
   .description("Search and list logs")
-  .option("--project <id>", "Filter by project ID")
+  .option("--project <name|id>", "Filter by project name or ID")
   .option("--page <id>", "Filter by page ID")
   .option("--level <levels>", "Comma-separated levels (error,warn,info,debug,fatal)")
   .option("--service <name>", "Filter by service")
@@ -29,7 +35,7 @@ program.command("list")
     const db = getDb()
     const since = parseRelativeTime(opts.since)
     const rows = searchLogs(db, {
-      project_id: opts.project,
+      project_id: resolveProject(opts.project),
       page_id: opts.page,
       level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
       service: opts.service,
@@ -52,20 +58,20 @@ program.command("list")
 // ── logs tail ──────────────────────────────────────────────
 program.command("tail")
   .description("Show most recent logs")
-  .option("--project <id>")
+  .option("--project <name|id>", "Project name or ID")
   .option("--n <count>", "Number of logs", "50")
   .action((opts) => {
-    const rows = tailLogs(getDb(), opts.project, Number(opts.n))
+    const rows = tailLogs(getDb(), resolveProject(opts.project), Number(opts.n))
     for (const r of rows) console.log(`${r.timestamp}  ${pad(r.level.toUpperCase(), 5)}  ${r.message}`)
   })
 
 // ── logs summary ──────────────────────────────────────────
 program.command("summary")
   .description("Error/warn summary by service")
-  .option("--project <id>")
+  .option("--project <name|id>", "Project name or ID")
   .option("--since <time>", "Relative time (1h, 24h, 7d)", "24h")
   .action((opts) => {
-    const summary = summarizeLogs(getDb(), opts.project, parseRelativeTime(opts.since))
+    const summary = summarizeLogs(getDb(), resolveProject(opts.project), parseRelativeTime(opts.since))
     if (!summary.length) { console.log("No errors/warnings in this window."); return }
     for (const s of summary) console.log(`${pad(s.level.toUpperCase(), 5)} ${pad(s.service ?? "-", 15)} count=${s.count} latest=${s.latest}`)
   })
@@ -75,10 +81,10 @@ program.command("push <message>")
   .description("Push a log entry")
   .option("--level <level>", "Log level", "info")
   .option("--service <name>")
-  .option("--project <id>")
+  .option("--project <name|id>", "Project name or ID")
   .option("--trace <id>", "Trace ID")
   .action((message, opts) => {
-    const row = ingestLog(getDb(), { level: opts.level as LogLevel, message, service: opts.service, project_id: opts.project, trace_id: opts.trace })
+    const row = ingestLog(getDb(), { level: opts.level as LogLevel, message, service: opts.service, project_id: resolveProject(opts.project), trace_id: opts.trace })
     console.log(`Logged: ${row.id}`)
   })
 
@@ -104,18 +110,18 @@ projectCmd.command("list").action(() => {
 const pageCmd = program.command("page").description("Manage pages")
 
 pageCmd.command("add")
-  .option("--project <id>")
+  .option("--project <name|id>", "Project name or ID")
   .option("--url <url>")
   .option("--name <name>")
   .action((opts) => {
     if (!opts.project || !opts.url) { console.error("--project and --url required"); process.exit(1) }
-    const p = createPage(getDb(), { project_id: opts.project, url: opts.url, name: opts.name })
+    const p = createPage(getDb(), { project_id: resolveProject(opts.project), url: opts.url, name: opts.name })
     console.log(`Page registered: ${p.id} — ${p.url}`)
   })
 
-pageCmd.command("list").option("--project <id>").action((opts) => {
+pageCmd.command("list").option("--project <name|id>", "Project name or ID").action((opts) => {
   if (!opts.project) { console.error("--project required"); process.exit(1) }
-  const pages = listPages(getDb(), opts.project)
+  const pages = listPages(getDb(), resolveProject(opts.project))
   for (const p of pages) console.log(`${p.id}  ${p.url}  last=${p.last_scanned_at ?? "never"}`)
 })
 
@@ -123,16 +129,16 @@ pageCmd.command("list").option("--project <id>").action((opts) => {
 const jobCmd = program.command("job").description("Manage scan jobs")
 
 jobCmd.command("create")
-  .option("--project <id>")
+  .option("--project <name|id>", "Project name or ID")
   .option("--schedule <cron>", "Cron expression", "*/30 * * * *")
   .action((opts) => {
     if (!opts.project) { console.error("--project required"); process.exit(1) }
-    const j = createJob(getDb(), { project_id: opts.project, schedule: opts.schedule })
+    const j = createJob(getDb(), { project_id: resolveProject(opts.project), schedule: opts.schedule })
     console.log(`Job created: ${j.id} — ${j.schedule}`)
   })
 
-jobCmd.command("list").option("--project <id>").action((opts) => {
-  const jobs = listJobs(getDb(), opts.project)
+jobCmd.command("list").option("--project <name|id>", "Project name or ID").action((opts) => {
+  const jobs = listJobs(getDb(), resolveProject(opts.project))
   for (const j of jobs) console.log(`${j.id}  ${j.schedule}  enabled=${j.enabled}  last=${j.last_run_at ?? "never"}`)
 })
 
@@ -140,7 +146,7 @@ jobCmd.command("list").option("--project <id>").action((opts) => {
 program.command("scan")
   .description("Run an immediate scan for a job")
   .option("--job <id>")
-  .option("--project <id>")
+  .option("--project <name|id>", "Project name or ID")
   .action(async (opts) => {
     if (!opts.job) { console.error("--job required"); process.exit(1) }
     const db = getDb()
@@ -216,7 +222,7 @@ program.command("watch")
 // ── logs export ───────────────────────────────────────────
 program.command("export")
   .description("Export logs to JSON or CSV")
-  .option("--project <id>")
+  .option("--project <name|id>", "Project name or ID")
   .option("--since <time>", "Relative time or ISO")
   .option("--level <level>")
   .option("--service <name>")
@@ -228,7 +234,7 @@ program.command("export")
     const { createWriteStream } = await import("node:fs")
     const db = getDb()
     const options = {
-      project_id: opts.project,
+      project_id: resolveProject(opts.project),
       since: parseRelativeTime(opts.since),
       level: opts.level,
       service: opts.service,
