@@ -1,6 +1,6 @@
 {
   "name": "@hasna/logs",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Log aggregation + browser script + headless page scanner + performance monitoring for AI agents",
   "type": "module",
   "main": "./dist/index.js",

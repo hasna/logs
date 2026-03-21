@@ -182,6 +182,40 @@ program.command("scan")
     console.log("Scan complete.")
   })
 
+// ── logs diagnose ─────────────────────────────────────────
+program.command("diagnose")
+  .description("Health diagnosis: score, top errors, trends, failing pages")
+  .option("--project <name|id>", "Project name or ID")
+  .option("--since <time>", "Time window (1h, 24h, 7d)", "24h")
+  .option("--include <items>", "Comma-separated: top_errors,error_rate,failing_pages,perf")
+  .action(async (opts) => {
+    const { diagnose } = await import("../lib/diagnose.ts")
+    const projectId = resolveProject(opts.project)
+    if (!projectId) { console.error("--project required"); process.exit(1) }
+    const include = opts.include ? opts.include.split(",") : undefined
+    const result = diagnose(getDb(), projectId, opts.since, include)
+    const scoreColor = result.health_score >= 80 ? "\x1b[32m" : result.health_score >= 50 ? "\x1b[33m" : "\x1b[31m"
+    console.log(`\n${C.bold}Health Score:${C.reset} ${scoreColor}${result.health_score}/100${C.reset}`)
+    if (result.top_errors?.length) {
+      console.log(`\n${C.bold}Top Errors:${C.reset}`)
+      for (const e of result.top_errors) {
+        console.log(`  ${C.red}${pad(String(e.count), 5)}x${C.reset}  ${C.cyan}${pad(e.service ?? "-", 12)}${C.reset}  ${e.message}`)
+      }
+    }
+    if (result.error_rate !== undefined) {
+      console.log(`\n${C.bold}Error Rate:${C.reset} ${result.error_rate.toFixed(2)}%`)
+    }
+    if (result.failing_pages?.length) {
+      console.log(`\n${C.bold}Failing Pages:${C.reset}`)
+      for (const p of result.failing_pages) console.log(`  ${C.red}✗${C.reset}  ${p.url}  (${p.error_count} errors)`)
+    }
+    if (result.perf_regressions?.length) {
+      console.log(`\n${C.bold}Perf Regressions:${C.reset}`)
+      for (const r of result.perf_regressions) console.log(`  ${C.yellow}⚠${C.reset}  ${r.page_url}  p95=${r.p95_ms}ms`)
+    }
+    console.log("")
+  })
+
 // ── logs watch ────────────────────────────────────────────
 program.command("watch")
   .description("Stream new logs in real time with color coding")
