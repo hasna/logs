@@ -154,12 +154,21 @@ program.command("scan")
 // ── logs watch ────────────────────────────────────────────
 program.command("watch")
   .description("Stream new logs in real time with color coding")
-  .option("--project <id>")
-  .option("--level <levels>", "Comma-separated levels")
-  .option("--service <name>")
+  .option("--project <name|id>", "Filter by project name or ID")
+  .option("--level <levels>", "Comma-separated levels (debug,info,warn,error,fatal)")
+  .option("--service <name>", "Filter by service name")
+  .option("--interval <ms>", "Poll interval in milliseconds (default: 500)", "500")
+  .option("--since <time>", "Start from this time (default: now)")
   .action(async (opts) => {
     const db = getDb()
     const { searchLogs } = await import("../lib/query.ts")
+
+    // Resolve project name → ID if needed
+    let projectId = opts.project
+    if (projectId) {
+      const proj = db.query("SELECT id FROM projects WHERE id = ? OR name = ?").get(projectId, projectId) as { id: string } | null
+      if (proj) projectId = proj.id
+    }
 
     const COLORS: Record<string, string> = {
       debug: "\x1b[90m", info: "\x1b[36m", warn: "\x1b[33m", error: "\x1b[31m", fatal: "\x1b[35m",
@@ -167,16 +176,17 @@ program.command("watch")
     const RESET = "\x1b[0m"
     const BOLD = "\x1b[1m"
 
-    let lastTimestamp = new Date().toISOString()
+    let lastTimestamp = opts.since ? new Date(opts.since).toISOString() : new Date().toISOString()
     let errorCount = 0
     let warnCount = 0
+    const pollIntervalMs = Math.max(100, Number(opts.interval) || 500)
 
     process.stdout.write(`\x1b[2J\x1b[H`) // clear screen
-    console.log(`${BOLD}@hasna/logs watch${RESET} — Ctrl+C to exit\n`)
+    console.log(`${BOLD}@hasna/logs watch${RESET} — Ctrl+C to exit${projectId ? `  [project: ${opts.project}]` : ''}\n`)
 
     const poll = () => {
       const rows = searchLogs(db, {
-        project_id: opts.project,
+        project_id: projectId,
         level: opts.level ? (opts.level.split(",") as LogLevel[]) : undefined,
         service: opts.service,
         since: lastTimestamp,
@@ -199,7 +209,7 @@ program.command("watch")
       process.stdout.write(`\x1b]2;logs: ${errorCount}E ${warnCount}W\x07`)
     }
 
-    const interval = setInterval(poll, 500)
+    const interval = setInterval(poll, pollIntervalMs)
     process.on("SIGINT", () => { clearInterval(interval); console.log(`\n\nErrors: ${errorCount}  Warnings: ${warnCount}`); process.exit(0) })
   })
 
