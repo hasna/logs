@@ -9,6 +9,27 @@ import { createPage, createProject, listPages, listProjects, resolveProjectId } 
 import { runJob } from "../lib/scheduler.ts"
 import type { LogLevel } from "../types/index.ts"
 
+// ── Color helpers ──────────────────────────────────────────
+const C = {
+  reset: "\x1b[0m", bold: "\x1b[1m", dim: "\x1b[2m",
+  red: "\x1b[31m", yellow: "\x1b[33m", cyan: "\x1b[36m", gray: "\x1b[90m",
+  bgRed: "\x1b[41m\x1b[97m", magenta: "\x1b[35m",
+};
+const LEVEL_COLOR: Record<string, string> = {
+  fatal: C.bgRed, error: C.red, warn: C.yellow, info: "", debug: C.gray,
+};
+function colorRow(ts: string, level: string, svc: string, msg: string): string {
+  const lc = LEVEL_COLOR[level.toLowerCase()] ?? "";
+  const isTTY = process.stdout.isTTY;
+  if (!isTTY) return `${ts}  ${pad(level.toUpperCase(), 5)}  ${pad(svc, 12)}  ${msg}`;
+  return `${C.dim}${ts}${C.reset}  ${lc}${C.bold}${pad(level.toUpperCase(), 5)}${C.reset}  ${C.cyan}${pad(svc, 12)}${C.reset}  ${msg}`;
+}
+function colorLevel(level: string): string {
+  if (!process.stdout.isTTY) return pad(level.toUpperCase(), 5);
+  const lc = LEVEL_COLOR[level.toLowerCase()] ?? "";
+  return `${lc}${C.bold}${pad(level.toUpperCase(), 5)}${C.reset}`;
+}
+
 /** Resolve a project name or ID from CLI --project flag */
 function resolveProject(nameOrId: string | undefined): string | undefined {
   if (!nameOrId) return undefined;
@@ -50,7 +71,7 @@ program.command("list")
     }
     for (const r of rows) {
       const meta = r.metadata ? ` ${r.metadata}` : ""
-      console.log(`${r.timestamp}  ${pad(r.level.toUpperCase(), 5)}  ${pad(r.service ?? "-", 12)}  ${r.message}${meta}`)
+      console.log(`${colorRow(r.timestamp, r.level, r.service ?? "-", r.message)}${meta}`)
     }
     console.log(`\n${rows.length} log(s)`)
   })
@@ -62,7 +83,7 @@ program.command("tail")
   .option("--n <count>", "Number of logs", "50")
   .action((opts) => {
     const rows = tailLogs(getDb(), resolveProject(opts.project), Number(opts.n))
-    for (const r of rows) console.log(`${r.timestamp}  ${pad(r.level.toUpperCase(), 5)}  ${r.message}`)
+    for (const r of rows) console.log(colorRow(r.timestamp, r.level, r.service ?? "-", r.message))
   })
 
 // ── logs summary ──────────────────────────────────────────
@@ -73,7 +94,7 @@ program.command("summary")
   .action((opts) => {
     const summary = summarizeLogs(getDb(), resolveProject(opts.project), parseRelativeTime(opts.since))
     if (!summary.length) { console.log("No errors/warnings in this window."); return }
-    for (const s of summary) console.log(`${pad(s.level.toUpperCase(), 5)} ${pad(s.service ?? "-", 15)} count=${s.count} latest=${s.latest}`)
+    for (const s of summary) console.log(`${colorLevel(s.level)} ${C.cyan}${pad(s.service ?? "-", 15)}${C.reset} count=${s.count} latest=${s.latest}`)
   })
 
 // ── logs push ─────────────────────────────────────────────
