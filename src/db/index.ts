@@ -1,13 +1,30 @@
 import { Database } from "bun:sqlite"
 import { join } from "node:path"
-import { existsSync, mkdirSync } from "node:fs"
+import { existsSync, mkdirSync, cpSync } from "node:fs"
 import { migrateAlertRules } from "./migrations/001_alert_rules.ts"
 import { migrateIssues } from "./migrations/002_issues.ts"
 import { migrateRetention } from "./migrations/003_retention.ts"
 import { migratePageAuth } from "./migrations/004_page_auth.ts"
 
-const DATA_DIR = process.env.LOGS_DATA_DIR ?? join(process.env.HOME ?? "~", ".logs")
-const DB_PATH = process.env.LOGS_DB_PATH ?? join(DATA_DIR, "logs.db")
+function resolveDataDir(): string {
+  const explicit = process.env.HASNA_LOGS_DATA_DIR ?? process.env.LOGS_DATA_DIR
+  if (explicit) return explicit
+
+  const home = process.env.HOME ?? "~"
+  const newDir = join(home, ".hasna", "logs")
+  const oldDir = join(home, ".logs")
+
+  // Auto-migrate: copy old data to new location if needed
+  if (!existsSync(newDir) && existsSync(oldDir)) {
+    mkdirSync(join(home, ".hasna"), { recursive: true })
+    cpSync(oldDir, newDir, { recursive: true })
+  }
+
+  return newDir
+}
+
+const DATA_DIR = resolveDataDir()
+const DB_PATH = process.env.HASNA_LOGS_DB_PATH ?? process.env.LOGS_DB_PATH ?? join(DATA_DIR, "logs.db")
 
 let _db: Database | null = null
 

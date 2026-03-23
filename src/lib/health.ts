@@ -29,7 +29,7 @@ export function getHealth(db: Database): HealthResult {
 
   let db_size_bytes: number | null = null
   try {
-    const dbPath = process.env.LOGS_DB_PATH
+    const dbPath = process.env.HASNA_LOGS_DB_PATH ?? process.env.LOGS_DB_PATH
     if (dbPath) {
       const { statSync } = require("node:fs")
       db_size_bytes = statSync(dbPath).size
