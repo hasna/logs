@@ -17,7 +17,8 @@
     "dev": "bun run src/server/index.ts",
     "test": "bun test",
     "test:coverage": "bun test --coverage",
-    "lint": "biome check src/"
+    "lint": "biome check src/",
+    "postinstall": "mkdir -p $HOME/.hasna/logs 2>/dev/null || true"
   },
   "repository": {
     "type": "git",
