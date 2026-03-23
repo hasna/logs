@@ -75,53 +75,62 @@ const TOOLS: Record<string, { desc: string; params: string }> = {
   describe_tools:          { desc: "List all tools with descriptions and param signatures", params: "()" },
 }
 
-server.tool("search_tools", { query: z.string() }, ({ query }) => {
+// Fellow agents: keep MCP registrations behind this helper so descriptions and schemas stay aligned with the current SDK.
+function registerTool(
+  name: keyof typeof TOOLS,
+  schema: Record<string, z.ZodTypeAny>,
+  handler: (...args: any[]) => any,
+) {
+  return server.tool(name, TOOLS[name].desc, schema, handler)
+}
+
+registerTool("search_tools", { query: z.string() }, ({ query }) => {
   const q = query.toLowerCase()
   const matches = Object.entries(TOOLS).filter(([k, v]) => k.includes(q) || v.desc.toLowerCase().includes(q))
   const text = matches.map(([k, v]) => `${k}${v.params} — ${v.desc}`).join("\n") || "No matches"
   return { content: [{ type: "text", text }] }
 })
 
-server.tool("describe_tools", {}, () => ({
+registerTool("describe_tools", {}, () => ({
   content: [{ type: "text", text: Object.entries(TOOLS).map(([k, v]) => `${k}${v.params} — ${v.desc}`).join("\n") }]
 }))
 
-server.tool("resolve_project", { name: z.string() }, ({ name }) => {
+registerTool("resolve_project", { name: z.string() }, ({ name }) => {
   const id = resolveProjectId(db, name)
   const project = id ? db.prepare("SELECT * FROM projects WHERE id = $id").get({ $id: id }) : null
   return { content: [{ type: "text", text: JSON.stringify(project ?? { error: `Project '${name}' not found` }) }] }
 })
 
-server.tool("register_project", {
+registerTool("register_project", {
   name: z.string(), github_repo: z.string().optional(), base_url: z.string().optional(), description: z.string().optional(),
 }, (args) => ({ content: [{ type: "text", text: JSON.stringify(createProject(db, args)) }] }))
 
-server.tool("register_page", {
+registerTool("register_page", {
   project_id: z.string(), url: z.string(), path: z.string().optional(), name: z.string().optional(),
 }, (args) => ({ content: [{ type: "text", text: JSON.stringify(createPage(db, { ...args, project_id: rp(args.project_id) ?? args.project_id })) }] }))
 
-server.tool("create_scan_job", {
+registerTool("create_scan_job", {
   project_id: z.string(), schedule: z.string(), page_id: z.string().optional(),
 }, (args) => ({ content: [{ type: "text", text: JSON.stringify(createJob(db, { ...args, project_id: rp(args.project_id) ?? args.project_id })) }] }))
 
-server.tool("log_push", {
+registerTool("log_push", {
   level: z.enum(["debug", "info", "warn", "error", "fatal"]),
   message: z.string(),
   project_id: z.string().optional(), service: z.string().optional(),
   trace_id: z.string().optional(), session_id: z.string().optional(),
   agent: z.string().optional(), url: z.string().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 }, (args) => {
   const row = ingestLog(db, { ...args, project_id: rp(args.project_id) })
   return { content: [{ type: "text", text: `Logged: ${row.id}` }] }
 })
 
-server.tool("log_push_batch", {
+registerTool("log_push_batch", {
   entries: z.array(z.object({
     level: z.enum(["debug", "info", "warn", "error", "fatal"]),
     message: z.string(),
     project_id: z.string().optional(), service: z.string().optional(),
-    trace_id: z.string().optional(), metadata: z.record(z.unknown()).optional(),
+    trace_id: z.string().optional(), metadata: z.record(z.string(), z.unknown()).optional(),
   })),
   trace_id: z.string().optional().describe("Shared trace_id applied to all entries that don't have their own trace_id"),
   project_id: z.string().optional().describe("Shared project_id applied to all entries (individual entry project_id takes precedence)"),
@@ -134,7 +143,7 @@ server.tool("log_push_batch", {
   return { content: [{ type: "text", text: `Logged ${rows.length} entries${trace_id ? ` (trace: ${trace_id})` : ''}` }] }
 })
 
-server.tool("log_search", {
+registerTool("log_search", {
   project_id: z.string().optional(), page_id: z.string().optional(),
   level: z.string().optional(), service: z.string().optional(),
   since: z.string().optional(), until: z.string().optional(),
@@ -151,14 +160,14 @@ server.tool("log_search", {
   return { content: [{ type: "text", text: JSON.stringify(applyBrief(rows, args.brief !== false)) }] }
 })
 
-server.tool("log_tail", {
+registerTool("log_tail", {
   project_id: z.string().optional(), n: z.number().optional(), brief: z.boolean().optional(),
 }, ({ project_id, n, brief }) => {
   const rows = tailLogs(db, rp(project_id), n ?? 50)
   return { content: [{ type: "text", text: JSON.stringify(applyBrief(rows, brief !== false)) }] }
 })
 
-server.tool("log_count", {
+registerTool("log_count", {
   project_id: z.string().optional(), service: z.string().optional(),
   level: z.string().optional(), since: z.string().optional(), until: z.string().optional(),
   group_by: z.enum(["level", "service"]).optional().describe("Return breakdown by 'level' or 'service' in addition to totals"),
@@ -166,7 +175,7 @@ server.tool("log_count", {
   content: [{ type: "text", text: JSON.stringify(countLogs(db, { ...args, project_id: rp(args.project_id) })) }]
 }))
 
-server.tool("log_recent_errors", {
+registerTool("log_recent_errors", {
   project_id: z.string().optional(), since: z.string().optional(), limit: z.number().optional(),
 }, ({ project_id, since, limit }) => {
   const rows = searchLogs(db, {
@@ -178,19 +187,19 @@ server.tool("log_recent_errors", {
   return { content: [{ type: "text", text: JSON.stringify(applyBrief(rows, true)) }] }
 })
 
-server.tool("log_summary", {
+registerTool("log_summary", {
   project_id: z.string().optional(), since: z.string().optional(),
 }, ({ project_id, since }) => ({
   content: [{ type: "text", text: JSON.stringify(summarizeLogs(db, rp(project_id), parseTime(since) ?? since)) }]
 }))
 
-server.tool("log_context", {
+registerTool("log_context", {
   trace_id: z.string(), brief: z.boolean().optional(),
 }, ({ trace_id, brief }) => ({
   content: [{ type: "text", text: JSON.stringify(applyBrief(getLogContext(db, trace_id), brief !== false)) }]
 }))
 
-server.tool("log_context_from_id", {
+registerTool("log_context_from_id", {
   log_id: z.string(),
   brief: z.boolean().optional(),
   window: z.number().int().min(0).optional().describe("Return N logs before and after the target log's timestamp (in addition to trace context)"),
@@ -198,7 +207,7 @@ server.tool("log_context_from_id", {
   content: [{ type: "text", text: JSON.stringify(applyBrief(getLogContextFromId(db, log_id, window ?? 0), brief !== false)) }]
 }))
 
-server.tool("log_export", {
+registerTool("log_export", {
   project_id: z.string().optional().describe("Project name or ID"),
   format: z.enum(["json", "csv"]).optional().default("json").describe("Output format"),
   since: z.string().optional().describe("Since time (1h, 24h, 7d, ISO)"),
@@ -222,7 +231,7 @@ server.tool("log_export", {
   return { content: [{ type: "text" as const, text: chunks.join("") }] }
 })
 
-server.tool("log_diagnose", {
+registerTool("log_diagnose", {
   project_id: z.string(),
   since: z.string().optional(),
   include: z.array(z.enum(["top_errors", "error_rate", "failing_pages", "perf"])).optional(),
@@ -230,7 +239,7 @@ server.tool("log_diagnose", {
   content: [{ type: "text", text: JSON.stringify(diagnose(db, rp(project_id) ?? project_id, since, include)) }]
 }))
 
-server.tool("log_compare", {
+registerTool("log_compare", {
   project_id: z.string(),
   a_since: z.string(), a_until: z.string(),
   b_since: z.string(), b_until: z.string(),
@@ -240,71 +249,71 @@ server.tool("log_compare", {
     parseTime(b_since) ?? b_since, parseTime(b_until) ?? b_until)) }]
 }))
 
-server.tool("log_session_context", {
+registerTool("log_session_context", {
   session_id: z.string(), brief: z.boolean().optional(),
 }, async ({ session_id, brief }) => {
   const ctx = await getSessionContext(db, session_id)
   return { content: [{ type: "text", text: JSON.stringify({ ...ctx, logs: applyBrief(ctx.logs, brief !== false) }) }] }
 })
 
-server.tool("perf_snapshot", {
+registerTool("perf_snapshot", {
   project_id: z.string(), page_id: z.string().optional(),
 }, ({ project_id, page_id }) => {
   const snap = getLatestSnapshot(db, rp(project_id) ?? project_id, page_id)
   return { content: [{ type: "text", text: JSON.stringify(snap ? { ...snap, label: scoreLabel(snap.score) } : null) }] }
 })
 
-server.tool("perf_trend", {
+registerTool("perf_trend", {
   project_id: z.string(), page_id: z.string().optional(), since: z.string().optional(), limit: z.number().optional(),
 }, ({ project_id, page_id, since, limit }) => ({
   content: [{ type: "text", text: JSON.stringify(getPerfTrend(db, rp(project_id) ?? project_id, page_id, parseTime(since) ?? since, limit ?? 50)) }]
 }))
 
-server.tool("scan_status", {
+registerTool("scan_status", {
   project_id: z.string().optional(),
 }, ({ project_id }) => ({
   content: [{ type: "text", text: JSON.stringify(listJobs(db, rp(project_id))) }]
 }))
 
-server.tool("list_projects", {}, () => ({
+registerTool("list_projects", {}, () => ({
   content: [{ type: "text", text: JSON.stringify(listProjects(db)) }]
 }))
 
-server.tool("list_pages", { project_id: z.string() }, ({ project_id }) => ({
+registerTool("list_pages", { project_id: z.string() }, ({ project_id }) => ({
   content: [{ type: "text", text: JSON.stringify(listPages(db, rp(project_id) ?? project_id)) }]
 }))
 
-server.tool("list_issues", {
+registerTool("list_issues", {
   project_id: z.string().optional(), status: z.string().optional(), limit: z.number().optional(),
 }, ({ project_id, status, limit }) => ({
   content: [{ type: "text", text: JSON.stringify(listIssues(db, rp(project_id), status, limit ?? 50)) }]
 }))
 
-server.tool("resolve_issue", {
+registerTool("resolve_issue", {
   id: z.string(), status: z.enum(["open", "resolved", "ignored"]),
 }, ({ id, status }) => ({
   content: [{ type: "text", text: JSON.stringify(updateIssueStatus(db, id, status)) }]
 }))
 
-server.tool("create_alert_rule", {
+registerTool("create_alert_rule", {
   project_id: z.string(), name: z.string(),
   level: z.string().optional(), service: z.string().optional(),
   threshold_count: z.number().optional(), window_seconds: z.number().optional(),
   action: z.enum(["webhook", "log"]).optional(), webhook_url: z.string().optional(),
 }, (args) => ({ content: [{ type: "text", text: JSON.stringify(createAlertRule(db, { ...args, project_id: rp(args.project_id) ?? args.project_id })) }] }))
 
-server.tool("list_alert_rules", {
+registerTool("list_alert_rules", {
   project_id: z.string().optional(),
 }, ({ project_id }) => ({
   content: [{ type: "text", text: JSON.stringify(listAlertRules(db, rp(project_id))) }]
 }))
 
-server.tool("delete_alert_rule", { id: z.string() }, ({ id }) => {
+registerTool("delete_alert_rule", { id: z.string() }, ({ id }) => {
   deleteAlertRule(db, id)
   return { content: [{ type: "text", text: "deleted" }] }
 })
 
-server.tool("get_health", {}, () => ({
+registerTool("get_health", {}, () => ({
   content: [{ type: "text", text: JSON.stringify(getHealth(db)) }]
 }))
 
