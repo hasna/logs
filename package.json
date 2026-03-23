@@ -1,6 +1,6 @@
 {
   "name": "@hasna/logs",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "description": "Log aggregation + browser script + headless page scanner + performance monitoring for AI agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -24,8 +24,8 @@
     "url": "https://github.com/hasna/logs.git"
   },
   "publishConfig": {
-    "access": "restricted",
-    "registry": "https://registry.npmjs.org/"
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   },
   "keywords": [
     "logs",
@@ -37,7 +37,7 @@
     "lighthouse"
   ],
   "author": "Andrei Hasna <andrei@hasna.com>",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "commander": "^14.0.0",
