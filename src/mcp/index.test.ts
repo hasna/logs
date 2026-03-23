@@ -18,7 +18,9 @@ test("logs MCP lists tools over stdio", async () => {
 
     expect(toolNames.length).toBeGreaterThan(0)
     expect(toolNames).toContain("get_health")
+    expect(toolNames).toContain("log_export")
     expect(toolNames).toContain("log_search")
+    expect(toolNames).toContain("log_stats")
   } finally {
     await client.close().catch(() => {})
   }

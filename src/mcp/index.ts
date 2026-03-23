@@ -61,6 +61,7 @@ const TOOLS: Record<string, { desc: string; params: string }> = {
   log_summary:             { desc: "Error/warn counts by service", params: "(project_id?, since?)" },
   log_context:             { desc: "All logs for a trace_id", params: "(trace_id, brief?=true)" },
   log_context_from_id:     { desc: "Trace context from a log ID (no trace_id needed)", params: "(log_id, brief?=true)" },
+  log_export:              { desc: "Export matching logs as JSON or CSV", params: "(project_id?, format?='json', since?, until?, level?, service?, limit?=100000)" },
   log_diagnose:            { desc: "Full diagnosis: score, top errors, failing pages, perf regressions", params: "(project_id, since?='24h', include?=['top_errors','error_rate','failing_pages','perf'])" },
   log_compare:             { desc: "Diff two time windows for new/resolved errors", params: "(project_id, a_since, a_until, b_since, b_until)" },
   log_session_context:     { desc: "Logs + session metadata for a session_id", params: "(session_id, brief?=true)" },
@@ -75,6 +76,7 @@ const TOOLS: Record<string, { desc: string; params: string }> = {
   list_alert_rules:        { desc: "List alert rules", params: "(project_id?)" },
   delete_alert_rule:       { desc: "Delete alert rule", params: "(id)" },
   get_health:              { desc: "Server health + DB stats", params: "()" },
+  log_stats:               { desc: "Aggregate DB-level log statistics for a project", params: "(project_id?)" },
   search_tools:            { desc: "Search tools by keyword — returns names, descriptions, param signatures", params: "(query)" },
   describe_tools:          { desc: "List all tools with descriptions and param signatures", params: "()" },
 }
@@ -321,7 +323,7 @@ registerTool("get_health", {}, () => ({
   content: [{ type: "text", text: JSON.stringify(getHealth(db)) }]
 }))
 
-server.tool("log_stats", {
+registerTool("log_stats", {
   project_id: z.string().optional().describe("Project name or ID (scope stats to a project)"),
 }, (args) => {
   const projectId = rp(args.project_id)
