@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import { registerCloudTools } from "@hasna/cloud"
 import { z } from "zod"
 import { getDb } from "../db/index.ts"
 import { ingestBatch, ingestLog } from "../lib/ingest.ts"
@@ -403,4 +404,5 @@ server.tool("list_agents", "List all registered agents.", {}, async () => {
 })
 
 const transport = new StdioServerTransport()
+registerCloudTools(server, "logs")
 await server.connect(transport)
