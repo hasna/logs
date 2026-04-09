@@ -1,11 +1,11 @@
-import type { Database } from "bun:sqlite"
+import type { DbAdapter } from "@hasna/cloud"
 import type { LogEntry, LogRow } from "../types/index.ts"
 import { upsertIssue } from "./issues.ts"
 import { evaluateAlerts } from "./alerts.ts"
 
 const ERROR_LEVELS = new Set(["warn", "error", "fatal"])
 
-export function ingestLog(db: Database, entry: LogEntry): LogRow {
+export function ingestLog(db: DbAdapter, entry: LogEntry): LogRow {
   const stmt = db.prepare(`
     INSERT INTO logs (project_id, page_id, level, source, service, message, trace_id, session_id, agent, url, stack_trace, metadata)
     VALUES ($project_id, $page_id, $level, $source, $service, $message, $trace_id, $session_id, $agent, $url, $stack_trace, $metadata)
@@ -37,7 +37,7 @@ export function ingestLog(db: Database, entry: LogEntry): LogRow {
   return row
 }
 
-export function ingestBatch(db: Database, entries: LogEntry[], sharedTraceId?: string | null): LogRow[] {
+export function ingestBatch(db: DbAdapter, entries: LogEntry[], sharedTraceId?: string | null): LogRow[] {
   // Apply shared trace_id to entries that don't have their own
   if (sharedTraceId) {
     entries = entries.map(e => e.trace_id ? e : { ...e, trace_id: sharedTraceId })
@@ -47,8 +47,9 @@ export function ingestBatch(db: Database, entries: LogEntry[], sharedTraceId?: s
     VALUES ($project_id, $page_id, $level, $source, $service, $message, $trace_id, $session_id, $agent, $url, $stack_trace, $metadata)
     RETURNING *
   `)
-  const tx = db.transaction((items: LogEntry[]) =>
-    items.map(entry =>
+  // @hasna/cloud executes the callback inside the transaction immediately.
+  const rows = db.transaction(() =>
+    entries.map(entry =>
       insert.get({
         $project_id: entry.project_id ?? null,
         $page_id: entry.page_id ?? null,
@@ -65,7 +66,6 @@ export function ingestBatch(db: Database, entries: LogEntry[], sharedTraceId?: s
       }) as LogRow
     )
   )
-  const rows = tx(entries)
 
   // Issue grouping for error-level entries (outside transaction for perf)
   for (const entry of entries) {
