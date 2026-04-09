@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerCloudTools } from "@hasna/cloud"
 import { z } from "zod"
 import { getDb } from "../db/index.ts"
+import { exitIfMetadataRequest, PACKAGE_VERSION } from "../lib/package-meta.ts"
 import { ingestBatch, ingestLog } from "../lib/ingest.ts"
 import { getLogContext, getLogContextFromId, searchLogs, tailLogs } from "../lib/query.ts"
 import { summarizeLogs } from "../lib/summarize.ts"
@@ -21,8 +22,13 @@ import { getSessionContext } from "../lib/session-context.ts"
 import { parseTime } from "../lib/parse-time.ts"
 import type { LogLevel, LogRow } from "../types/index.ts"
 
+exitIfMetadataRequest({
+  name: "logs-mcp",
+  description: "Start the @hasna/logs MCP server over stdio.",
+})
+
 const db = getDb()
-const server = new McpServer({ name: "logs", version: "0.3.0" })
+const server = new McpServer({ name: "logs", version: PACKAGE_VERSION })
 
 // --- in-memory agent registry ---
 interface _LogsAgent { id: string; name: string; session_id?: string; last_seen_at: string; project_id?: string }
@@ -355,9 +361,8 @@ server.tool(
   },
   async (params) => {
     try {
-      const pkg = require("../../package.json")
       db.run("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)", [
-        params.message, params.email || null, params.category || "general", pkg.version,
+        params.message, params.email || null, params.category || "general", PACKAGE_VERSION,
       ])
       return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] }
     } catch (e) {

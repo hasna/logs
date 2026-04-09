@@ -2,6 +2,7 @@
 import { Command } from "commander"
 import { getDb } from "../db/index.ts"
 import { ingestLog } from "../lib/ingest.ts"
+import { PACKAGE_VERSION } from "../lib/package-meta.ts"
 import { searchLogs, tailLogs } from "../lib/query.ts"
 import { summarizeLogs } from "../lib/summarize.ts"
 import { createJob, listJobs } from "../lib/jobs.ts"
@@ -39,7 +40,7 @@ function resolveProject(nameOrId: string | undefined): string | undefined {
 const program = new Command()
   .name("logs")
   .description("@hasna/logs — log aggregation and monitoring")
-  .version("0.0.1")
+  .version(PACKAGE_VERSION)
 
 // ── logs list ──────────────────────────────────────────────
 program.command("list")

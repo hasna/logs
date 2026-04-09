@@ -5,6 +5,7 @@ import { serveStatic } from "hono/bun"
 import { getDb } from "../db/index.ts"
 import { getBrowserScript } from "../lib/browser-script.ts"
 import { getHealth } from "../lib/health.ts"
+import { exitIfMetadataRequest, readOptionValue } from "../lib/package-meta.ts"
 import { startScheduler } from "../lib/scheduler.ts"
 import { alertsRoutes } from "./routes/alerts.ts"
 import { issuesRoutes } from "./routes/issues.ts"
@@ -14,7 +15,14 @@ import { perfRoutes } from "./routes/perf.ts"
 import { projectsRoutes } from "./routes/projects.ts"
 import { streamRoutes } from "./routes/stream.ts"
 
-const PORT = Number(process.env.LOGS_PORT ?? 3460)
+exitIfMetadataRequest({
+  name: "logs-serve",
+  description: "Start the @hasna/logs REST API server.",
+  options: ["  -p, --port <n>  Port to listen on (default: LOGS_PORT or 3460)"],
+})
+
+const portArg = readOptionValue(["--port", "-p"])
+const PORT = Number(portArg ?? process.env.LOGS_PORT ?? 3460)
 const db = getDb()
 const app = new Hono()
 
