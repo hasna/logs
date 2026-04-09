@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 
 type StandaloneCliSpec = {
   name: string
@@ -10,11 +10,29 @@ type PackageJson = {
   version?: string
 }
 
-const packageJson = JSON.parse(
-  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
-) as PackageJson
+const PACKAGE_JSON_CANDIDATES = [
+  "../../package.json",
+  "../package.json",
+  "./package.json",
+]
 
-export const PACKAGE_VERSION = packageJson.version ?? "0.0.0"
+function readPackageJson(baseUrl: string | URL = import.meta.url): PackageJson {
+  // Bundled shared chunks live under dist/, while source modules live under src/lib/.
+  for (const relativePath of PACKAGE_JSON_CANDIDATES) {
+    const candidate = new URL(relativePath, baseUrl)
+    if (!existsSync(candidate)) continue
+
+    return JSON.parse(readFileSync(candidate, "utf8")) as PackageJson
+  }
+
+  throw new Error(`Unable to locate package.json from ${String(baseUrl)}`)
+}
+
+export function readPackageVersion(baseUrl: string | URL = import.meta.url): string {
+  return readPackageJson(baseUrl).version ?? "0.0.0"
+}
+
+export const PACKAGE_VERSION = readPackageVersion()
 
 export function exitIfMetadataRequest(spec: StandaloneCliSpec, argv = process.argv.slice(2)): void {
   if (argv.includes("--version") || argv.includes("-V")) {
