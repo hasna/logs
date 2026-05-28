@@ -419,20 +419,21 @@ server.tool("list_agents", "List all registered agents.", {}, async () => {
 }
 
 async function main(): Promise<void> {
-  const { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } = await import("./http.ts")
+  const { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } = await import("./http.ts")
 
-  if (isHttpMode()) {
-    const handle = await startMcpHttpServer(buildServer, {
-      port: resolveMcpHttpPort(),
-    })
-    process.on("SIGINT", () => void handle.close().finally(() => process.exit(0)))
-    process.on("SIGTERM", () => void handle.close().finally(() => process.exit(0)))
+  if (isStdioMode()) {
+    const server = buildServer()
+    const transport = new StdioServerTransport()
+    await server.connect(transport)
     return
   }
 
-  const server = buildServer()
-  const transport = new StdioServerTransport()
-  await server.connect(transport)
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const handle = await startMcpHttpServer(buildServer, {
+    port: resolveMcpHttpPort(),
+  })
+  process.on("SIGINT", () => void handle.close().finally(() => process.exit(0)))
+  process.on("SIGTERM", () => void handle.close().finally(() => process.exit(0)))
 }
 
 if (import.meta.main) {

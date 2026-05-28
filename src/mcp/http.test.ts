@@ -11,9 +11,9 @@ import {
 } from "./http.ts";
 
 describe("logs MCP HTTP transport", () => {
-  test("defaults port to 8820", () => {
-    expect(DEFAULT_MCP_HTTP_PORT).toBe(8820);
-    expect(resolveMcpHttpPort(["node"], {})).toBe(8820);
+  test("defaults port to 8864", () => {
+    expect(DEFAULT_MCP_HTTP_PORT).toBe(8864);
+    expect(resolveMcpHttpPort(["node"], {})).toBe(8864);
     expect(resolveMcpHttpPort(["node", "--port", "9001"], {})).toBe(9001);
     expect(resolveMcpHttpPort(["node"], { MCP_HTTP_PORT: "9002" })).toBe(9002);
   });
