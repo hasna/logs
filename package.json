@@ -11,7 +11,7 @@
     "logs-serve": "./dist/server/index.js"
   },
   "scripts": {
-    "build": "bun build src/cli/index.ts src/mcp/index.ts src/server/index.ts --outdir dist --target bun --splitting --external playwright --external playwright-core --external electron --external chromium-bidi --external lighthouse",
+    "build": "bun build src/cli/index.ts src/mcp/index.ts src/server/index.ts src/index.ts --outdir dist --target bun --splitting --external playwright --external playwright-core --external electron --external chromium-bidi --external lighthouse",
     "build:dashboard": "cd dashboard && bun run build",
     "build:all": "bun run build:dashboard && bun run build",
     "dev": "bun run src/server/index.ts",
