@@ -24,15 +24,21 @@ import type { LogLevel, LogRow } from "../types/index.ts"
 
 exitIfMetadataRequest({
   name: "logs-mcp",
-  description: "Start the @hasna/logs MCP server over stdio.",
+  description: "Start the @hasna/logs MCP server (stdio by default).",
+  options: [
+    "  --http           Serve MCP over Streamable HTTP (127.0.0.1)",
+    "  --port <number>  HTTP port (default: 8820, env: MCP_HTTP_PORT)",
+  ],
 })
 
 const db = getDb()
-const server = new McpServer({ name: "logs", version: PACKAGE_VERSION })
 
-// --- in-memory agent registry ---
+// --- in-memory agent registry (module-level for shared HTTP process) ---
 interface _LogsAgent { id: string; name: string; session_id?: string; last_seen_at: string; project_id?: string }
 const _logsAgents = new Map<string, _LogsAgent>()
+
+export function buildServer(): McpServer {
+  const server = new McpServer({ name: "logs", version: PACKAGE_VERSION })
 
 const BRIEF_FIELDS: (keyof LogRow)[] = ["id", "timestamp", "level", "message", "service"]
 
@@ -408,6 +414,30 @@ server.tool("list_agents", "List all registered agents.", {}, async () => {
   return { content: [{ type: "text" as const, text: JSON.stringify([..._logsAgents.values()]) }] }
 })
 
-const transport = new StdioServerTransport()
-registerCloudTools(server, "logs")
-await server.connect(transport)
+  registerCloudTools(server, "logs")
+  return server
+}
+
+async function main(): Promise<void> {
+  const { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } = await import("./http.ts")
+
+  if (isHttpMode()) {
+    const handle = await startMcpHttpServer(buildServer, {
+      port: resolveMcpHttpPort(),
+    })
+    process.on("SIGINT", () => void handle.close().finally(() => process.exit(0)))
+    process.on("SIGTERM", () => void handle.close().finally(() => process.exit(0)))
+    return
+  }
+
+  const server = buildServer()
+  const transport = new StdioServerTransport()
+  await server.connect(transport)
+}
+
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(err)
+    process.exit(1)
+  })
+}

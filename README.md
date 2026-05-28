@@ -32,6 +32,21 @@ logs-mcp
 
 6 tools available.
 
+## HTTP mode
+
+Run a shared Streamable HTTP MCP server (127.0.0.1 only):
+
+```bash
+logs-mcp --http               # default port 8820
+logs-mcp --http --port 8820
+MCP_HTTP=1 logs-mcp
+```
+
+- Health: `GET http://127.0.0.1:8820/health`
+- MCP: `POST http://127.0.0.1:8820/mcp`
+
+Stdio remains the default when no `--http` flag is passed.
+
 ## REST API
 
 ```bash

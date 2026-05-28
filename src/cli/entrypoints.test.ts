@@ -46,7 +46,7 @@ test("logs-mcp --help prints usage and exits without starting stdio transport", 
 
   expect(result.exitCode).toBe(0)
   expect(result.stdout).toContain("Usage: logs-mcp [options]")
-  expect(result.stdout).toContain("Start the @hasna/logs MCP server over stdio.")
+  expect(result.stdout).toContain("Start the @hasna/logs MCP server (stdio by default).")
   expect(result.stdout).not.toContain("Listening")
   expect(result.stderr.trim()).toBe("")
 })
