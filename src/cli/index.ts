@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander"
 import { getDb } from "../db/index.ts"
 import { ingestLog } from "../lib/ingest.ts"
@@ -465,5 +466,6 @@ function parseRelativeTime(val?: string): string | undefined {
   const ms = Number(n) * (unit === "h" ? 3600 : unit === "d" ? 86400 : 60) * 1000
   return new Date(Date.now() - ms).toISOString()
 }
+registerEventsCommands(program, { source: "logs" });
 
 program.parse()
