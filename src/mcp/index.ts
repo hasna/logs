@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { registerCloudTools } from "@hasna/cloud";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -59,7 +58,7 @@ exitIfMetadataRequest({
   description: "Start the @hasna/logs MCP server (stdio by default).",
   options: [
     "  --http           Serve MCP over Streamable HTTP (127.0.0.1)",
-    "  --port <number>  HTTP port (default: 8820, env: MCP_HTTP_PORT)",
+    "  --port <number>  HTTP port (default: 8864, env: MCP_HTTP_PORT)",
   ],
 });
 
@@ -1860,7 +1859,6 @@ export function buildServer(): McpServer {
     },
   );
 
-  registerCloudTools(server, "logs");
   return server;
 }
 

@@ -2,13 +2,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { buildServer } from "./index.ts";
 import {
   DEFAULT_MCP_HTTP_PORT,
   isHttpMode,
   resolveMcpHttpPort,
   startMcpHttpServer,
 } from "./http.ts";
+import { buildServer } from "./index.ts";
 
 describe("logs MCP HTTP transport", () => {
   test("defaults port to 8864", () => {
@@ -28,7 +28,8 @@ describe("logs MCP HTTP transport", () => {
 describe("logs buildServer stdio registration", () => {
   test("registers tools over in-memory transport", async () => {
     const server = buildServer();
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
 
     const client = new Client({ name: "test", version: "0.0.0" });

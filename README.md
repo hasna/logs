@@ -39,13 +39,13 @@ Includes log search, raw event search/watch/export, projected test-report search
 Run a shared Streamable HTTP MCP server (127.0.0.1 only):
 
 ```bash
-logs-mcp --http               # default port 8820
-logs-mcp --http --port 8820
+logs-mcp --http               # default port 8864
+logs-mcp --http --port 8864
 MCP_HTTP=1 logs-mcp
 ```
 
-- Health: `GET http://127.0.0.1:8820/health`
-- MCP: `POST http://127.0.0.1:8820/mcp`
+- Health: `GET http://127.0.0.1:8864/health`
+- MCP: `POST http://127.0.0.1:8864/mcp`
 
 Stdio remains the default when no `--http` flag is passed.
 

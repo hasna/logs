@@ -58,7 +58,6 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/cloud": "0.1.24",
     "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^14.0.0",

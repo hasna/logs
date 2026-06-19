@@ -39,7 +39,7 @@ The reviewers accepted this implementation evidence:
 
 ## Remaining Full-Gate Rejection Reasons
 
-- Repo-wide Biome lint still fails.
+- Historical note: repo-wide Biome lint was not part of this accepted slice.
 - Framework adapters are still incomplete for Next.js, Vite, Hono, Express, Fastify, workers, and OpenTelemetry.
 - Raw segment sync and compatibility projection rebuild remain incomplete.
 - High-volume, slow-client, reconnect, crash-recovery, and multi-machine validation remain incomplete.
