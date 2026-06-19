@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite"
+import type { Database } from "bun:sqlite";
 
 export function migrateAlertRules(db: Database): void {
   db.run(`
@@ -16,6 +16,8 @@ export function migrateAlertRules(db: Database): void {
       last_fired_at TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     )
-  `)
-  db.run(`CREATE INDEX IF NOT EXISTS idx_alert_rules_project ON alert_rules(project_id)`)
+  `);
+  db.run(
+    "CREATE INDEX IF NOT EXISTS idx_alert_rules_project ON alert_rules(project_id)",
+  );
 }

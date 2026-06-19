@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite"
+import type { Database } from "bun:sqlite";
 
 export function migrateIssues(db: Database): void {
   db.run(`
@@ -15,7 +15,11 @@ export function migrateIssues(db: Database): void {
       status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','ignored')),
       UNIQUE(project_id, fingerprint)
     )
-  `)
-  db.run(`CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id, status)`)
-  db.run(`CREATE INDEX IF NOT EXISTS idx_issues_fingerprint ON issues(fingerprint)`)
+  `);
+  db.run(
+    "CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id, status)",
+  );
+  db.run(
+    "CREATE INDEX IF NOT EXISTS idx_issues_fingerprint ON issues(fingerprint)",
+  );
 }

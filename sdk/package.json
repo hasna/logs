@@ -1,27 +1,40 @@
 {
   "name": "@hasna/logs-sdk",
   "version": "0.1.0",
-  "description": "Zero-dependency fetch client for @hasna/logs \u2014 push logs, query, browse issues, perf snapshots",
+  "description": "Zero-dependency universal telemetry client for @hasna/logs",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js",
-    "./browser": "./dist/index.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./pino": {
+      "types": "./dist/pino.d.ts",
+      "import": "./dist/pino.js"
+    },
+    "./winston": {
+      "types": "./dist/winston.d.ts",
+      "import": "./dist/winston.js"
+    }
   },
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target browser"
+    "build": "rm -rf dist && bun build src/index.ts src/pino.ts src/winston.ts --outdir dist --target browser && ../node_modules/.bin/tsc -p tsconfig.json"
   },
-  "keywords": [
-    "logs",
-    "monitoring",
-    "sdk",
-    "ai-agents"
-  ],
+  "keywords": ["logs", "monitoring", "sdk", "ai-agents"],
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0"
 }

@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite"
+import type { Database } from "bun:sqlite";
 
 export function migratePageAuth(db: Database): void {
   db.run(`
@@ -9,5 +9,5 @@ export function migratePageAuth(db: Database): void {
       credentials TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     )
-  `)
+  `);
 }

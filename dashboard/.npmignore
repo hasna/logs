@@ -1,0 +1,4 @@
+# npm must package the built dashboard assets for logs-serve.
+*
+!dist/
+!dist/**

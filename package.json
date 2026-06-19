@@ -1,22 +1,40 @@
 {
   "name": "@hasna/logs",
-  "version": "0.3.26",
+  "version": "0.3.27",
   "description": "Log aggregation + browser script + headless page scanner + performance monitoring for AI agents",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./storage": {
+      "import": "./dist/storage.js"
+    }
+  },
   "bin": {
     "logs": "./dist/cli/index.js",
     "logs-mcp": "./dist/mcp/index.js",
     "logs-serve": "./dist/server/index.js"
   },
+  "files": ["dist", "dashboard/dist"],
   "scripts": {
-    "build": "bun build src/cli/index.ts src/mcp/index.ts src/server/index.ts src/index.ts --outdir dist --target bun --splitting --external playwright --external playwright-core --external electron --external chromium-bidi --external lighthouse",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/mcp/index.ts src/server/index.ts src/index.ts src/storage.ts --outdir dist --target bun --splitting --external playwright --external playwright-core --external electron --external chromium-bidi --external lighthouse",
     "build:dashboard": "cd dashboard && bun run build",
     "build:all": "bun run build:dashboard && bun run build",
     "dev": "bun run src/server/index.ts",
     "test": "bun test",
     "test:coverage": "bun test --coverage",
+    "validate:dashboard-stream": "bun scripts/dashboard-stream-validation-lab.ts",
+    "validate:browser-runtime": "bun scripts/browser-runtime-validation-lab.ts",
+    "validate:browser-spool": "bun scripts/browser-spool-validation-lab.ts",
+    "validate:logger-packages": "bun scripts/logger-package-validation-lab.ts",
+    "validate:real-life": "bun scripts/real-life-validation-lab.ts",
+    "validate:stress": "bun scripts/high-volume-ingest-stress.ts",
+    "validate:structured-logs": "bun scripts/structured-log-validation-lab.ts",
+    "validate:streams": "bun scripts/stream-load-validation.ts",
     "lint": "biome check src/",
     "postinstall": "mkdir -p $HOME/.hasna/logs 2>/dev/null || true"
   },
@@ -44,17 +62,19 @@
     "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^14.0.0",
+    "fast-xml-parser": "^5.8.0",
     "hono": "^4.7.11",
-    "ink": "^5.1.0",
     "node-cron": "^3.0.3",
-    "playwright": "^1.52.0",
-    "react": "^19.1.0"
+    "pg": "^8.20.0",
+    "playwright": "^1.52.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/bun": "latest",
     "@types/node-cron": "^3.0.11",
-    "@types/react": "^19.1.4",
-    "typescript": "^5.9.3"
+    "@types/pg": "^8.20.0",
+    "pino": "10.3.1",
+    "typescript": "^5.9.3",
+    "winston": "3.19.0"
   }
 }

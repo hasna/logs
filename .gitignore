@@ -14,6 +14,7 @@ coverage
 *.db
 *.db-shm
 *.db-wal
+.hasna/
 data/
 
 # logs

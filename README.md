@@ -21,6 +21,8 @@ logs --help
 - `logs tail`
 - `logs summary`
 - `logs push`
+- `logs events`
+- `logs test-reports`
 - `logs scan`
 - `logs diagnose`
 
@@ -30,7 +32,7 @@ logs --help
 logs-mcp
 ```
 
-6 tools available.
+Includes log search, raw event search/watch/export, projected test-report search/get, storage sync, scan, issue, and performance tools.
 
 ## HTTP mode
 
@@ -53,15 +55,36 @@ Stdio remains the default when no `--http` flag is passed.
 logs-serve
 ```
 
-## Cloud Sync
-
-This package supports cloud sync via `@hasna/cloud`:
+By default the API is locked unless an API token is configured or trusted
+loopback mode is explicitly enabled:
 
 ```bash
-cloud setup
-cloud sync push --service logs
-cloud sync pull --service logs
+HASNA_LOGS_API_TOKEN="$(openssl rand -hex 32)" logs-serve
+# or, for local-only development:
+logs-serve --local-open
 ```
+
+Use `Authorization: Bearer <token>` or `X-Logs-Token: <token>` for `/api/*`
+requests. Browser ingest tokens remain scoped write-only tokens for browser
+capture and do not grant general API access.
+
+Page scanner credentials are encrypted at rest with a generated local
+`page-auth.key` under the logs data directory. For deployments that need a
+managed secret, set `HASNA_LOGS_SECRET_KEY` or `LOGS_SECRET_KEY`:
+
+```bash
+export HASNA_LOGS_SECRET_KEY="$(openssl rand -hex 32)"
+```
+
+## Remote Sync
+
+Logs stores data locally in SQLite and can optionally push/pull service-owned tables to PostgreSQL, including AWS RDS:
+
+Configure `HASNA_LOGS_DATABASE_URL` or `LOGS_DATABASE_URL`, then use `logs storage status`, `logs storage push`, `logs storage pull`, or `logs storage sync`.
+
+The MCP server also exposes `storage_status`, `storage_push`, `storage_pull`, and `storage_sync`.
+
+`LOGS_DATABASE_URL` is accepted as the non-Hasna fallback database URL.
 
 ## Data Directory
 
