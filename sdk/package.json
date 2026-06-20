@@ -1,6 +1,6 @@
 {
   "name": "@hasna/logs-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zero-dependency universal telemetry client for @hasna/logs",
   "type": "module",
   "main": "./dist/index.js",

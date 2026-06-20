@@ -588,6 +588,8 @@ describe("LogsClient universal event methods", () => {
 
   it("persists structured transport records to a redacted file spool and replays them after restart", async () => {
     const spoolDirectory = mkdtempSync(join(tmpdir(), "open-logs-sdk-spool-"));
+    const basicAuthSecret = "dXNlcjpzdXBlci1zZWNyZXQ=";
+    const urlUserinfoPassword = "sdk-url-spool-secret";
     const requests: MockRequest[] = [];
     let collectorUp = false;
     globalThis.fetch = (async (
@@ -636,6 +638,9 @@ describe("LogsClient universal event methods", () => {
           msg: "spool me token=OPENLOGS_SECRET_CANARY_sdk_spool_12345",
           token: "OPENLOGS_SECRET_CANARY_sdk_spool_12345",
           args: ["--api-key", "plain-spool-secret"],
+          headers_json: `{"Authorization":"Basic ${basicAuthSecret}"}`,
+          env_header: `HTTP_AUTHORIZATION=Basic ${basicAuthSecret}`,
+          db_url: `postgres://app:${urlUserinfoPassword}@db.example/logs`,
         })}\n`,
       );
 
@@ -657,6 +662,8 @@ describe("LogsClient universal event methods", () => {
         "OPENLOGS_SECRET_CANARY_sdk_spool_prefix_12345",
       );
       expect(spooled).not.toContain("plain-spool-secret");
+      expect(spooled).not.toContain(basicAuthSecret);
+      expect(spooled).not.toContain(urlUserinfoPassword);
 
       const failedBody = requests[0]?.body as {
         logs?: Array<{
@@ -721,6 +728,9 @@ describe("LogsClient universal event methods", () => {
           msg?: string;
           token?: string;
           args?: string[];
+          headers_json?: string;
+          env_header?: string;
+          db_url?: string;
           _open_logs_event_id?: string;
         }>;
         metadata?: Record<string, unknown>;
@@ -740,6 +750,15 @@ describe("LogsClient universal event methods", () => {
       expect(replayBody.logs?.[0]?.msg).toBe("spool me token=[REDACTED]");
       expect(replayBody.logs?.[0]?.token).toBe("[REDACTED]");
       expect(replayBody.logs?.[0]?.args).toEqual(["--api-key", "[REDACTED]"]);
+      expect(replayBody.logs?.[0]?.headers_json).toBe(
+        `{"Authorization":"Basic [REDACTED]"}`,
+      );
+      expect(replayBody.logs?.[0]?.env_header).toBe(
+        "HTTP_AUTHORIZATION=Basic [REDACTED]",
+      );
+      expect(replayBody.logs?.[0]?.db_url).toBe(
+        "postgres://[REDACTED]@db.example/logs",
+      );
       expect(existsSync(spoolPath)).toBe(false);
       expect(restarted.stats()).toMatchObject({
         pending: 0,

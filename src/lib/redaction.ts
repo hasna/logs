@@ -36,6 +36,17 @@ const STRING_PATTERNS: Array<{
     replacement: `Bearer ${REDACTED}`,
   },
   {
+    label: "basic_auth",
+    pattern:
+      /\b([A-Za-z0-9_-]*Authorization\b\s*(?::|=|\\?["']\s*:\s*\\?["']?)\s*\\?["']?Basic\s+)[A-Za-z0-9+/=._~-]+/gi,
+    replacement: (_match, prefix: string) => `${prefix}${REDACTED}`,
+  },
+  {
+    label: "url_userinfo",
+    pattern: /\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^@\s/?#]+@)(?=[^\s/?#]+)/g,
+    replacement: (_match, scheme: string) => `${scheme}${REDACTED}@`,
+  },
+  {
     label: "github_token",
     pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g,
     replacement: REDACTED,
