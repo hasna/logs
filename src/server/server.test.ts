@@ -276,6 +276,39 @@ describe("POST /api/logs", () => {
       body: JSON.stringify({ level: "info", message: "remote blocked" }),
     });
     expect(remote.status).toBe(401);
+
+    const spoofedForwardedLocal = await app.request(
+      "https://telemetry.example/api/logs",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Forwarded-Host": "localhost",
+        },
+        body: JSON.stringify({
+          level: "info",
+          message: "spoofed forwarded host blocked",
+        }),
+      },
+    );
+    expect(spoofedForwardedLocal.status).toBe(401);
+
+    const proxyRewrittenHost = await app.request(
+      "https://telemetry.example/api/logs",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Host: "127.0.0.1:3460",
+          "X-Forwarded-Host": "telemetry.example",
+        },
+        body: JSON.stringify({
+          level: "info",
+          message: "proxy public host blocked",
+        }),
+      },
+    );
+    expect(proxyRewrittenHost.status).toBe(401);
   });
 
   it("requires the configured API token for telemetry reads, exports, streams, and admin routes", async () => {

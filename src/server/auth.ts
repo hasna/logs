@@ -104,22 +104,32 @@ export function isLocalOpenModeEnabled(): boolean {
 
 export function isTrustedLocalRequest(c: Context): boolean {
   const url = new URL(c.req.url);
-  const host =
-    forwardedHost(c.req.header("x-forwarded-host")) ??
-    hostWithoutPort(c.req.header("host")) ??
-    url.hostname;
-  return isLocalHost(host) && isLocalOrigin(c.req.header("origin"));
-}
+  const hosts = [
+    hostWithoutPort(c.req.header("host")),
+    url.hostname,
+    ...forwardedHosts(c.req.header("x-forwarded-host")),
+  ].filter((host): host is string => Boolean(host));
 
-function forwardedHost(value: string | undefined): string | null {
-  const first = value?.split(",")[0]?.trim();
-  return first ? hostWithoutPort(first) : null;
+  return (
+    hosts.length > 0 &&
+    hosts.every((host) => isLocalHost(host)) &&
+    isLocalOrigin(c.req.header("origin"))
+  );
 }
 
 function hostWithoutPort(value: string | undefined): string | null {
   if (!value) return null;
   if (value.startsWith("[")) return value.slice(1, value.indexOf("]"));
   return value.split(":")[0] || null;
+}
+
+function forwardedHosts(value: string | undefined): string[] {
+  return (
+    value
+      ?.split(",")
+      .map((host) => hostWithoutPort(host.trim()))
+      .filter((host): host is string => Boolean(host)) ?? []
+  );
 }
 
 function isLocalOrigin(origin: string | undefined): boolean {
