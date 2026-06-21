@@ -218,6 +218,46 @@ describe("redaction", () => {
     });
   });
 
+  it("redacts sensitive structured name/value pairs", () => {
+    const cookieSecret = "structured-cookie-secret";
+    const setCookieSecret = "structured-set-cookie-secret";
+    const apiKeySecret = "structured-api-key-secret";
+    const result = redactValue(
+      {
+        headers: [
+          { name: "Cookie", value: `sid=${cookieSecret}; theme=dark` },
+          { key: "set-cookie", value: `refresh=${setCookieSecret}; HttpOnly` },
+          { header: "x-api-key", values: [apiKeySecret] },
+          { name: "content-type", value: "application/json" },
+        ],
+        options: [{ name: "credentials", value: "include" }],
+      },
+      "metadata",
+    );
+
+    expect(JSON.stringify(result.value)).not.toContain(cookieSecret);
+    expect(JSON.stringify(result.value)).not.toContain(setCookieSecret);
+    expect(JSON.stringify(result.value)).not.toContain(apiKeySecret);
+    expect(result.value).toEqual({
+      headers: [
+        { name: "Cookie", value: REDACTED },
+        { key: "set-cookie", value: REDACTED },
+        { header: "x-api-key", values: REDACTED },
+        { name: "content-type", value: "application/json" },
+      ],
+      options: [{ name: "credentials", value: "include" }],
+    });
+    expect(result.report).toMatchObject({
+      applied: true,
+      fields: [
+        "metadata.headers[0].value",
+        "metadata.headers[1].value",
+        "metadata.headers[2].values",
+      ],
+      replacements: 3,
+    });
+  });
+
   it("does not infer split sensitive flags from ordinary credential words", () => {
     const result = redactValue(
       ["credentialed-user", "public-id-123"],

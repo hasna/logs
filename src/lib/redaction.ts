@@ -19,6 +19,8 @@ const SENSITIVE_FLAG =
   /^(?:authorization|auth|credentials?|api[-_]?key|token|secret|password|passwd|pwd|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?secret|client[-_]?(?:secret|credentials?))$/i;
 const SENSITIVE_FLAG_NAME =
   /(?:authorization|credentials?\b|api[-_]?key|token|secret|password|passwd|pwd|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?secret|client[-_]?(?:secret|credentials?))/i;
+const SENSITIVE_PAIR_NAME_KEYS = new Set(["name", "key", "header"]);
+const SENSITIVE_PAIR_VALUE_KEYS = new Set(["value", "values"]);
 const LOG_ENTRY_REDACTABLE_TOP_LEVEL_FIELDS = [
   "id",
   "source_event_id",
@@ -243,8 +245,16 @@ export function redactValue<T>(
 
   const values: Record<string, unknown> = {};
   const reports: RedactionReport[] = [];
-  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+  const record = input as Record<string, unknown>;
+  const pairName = sensitivePairName(record);
+  for (const [key, value] of Object.entries(record)) {
     const childPath = `${path}.${key}`;
+    if (shouldRedactSensitivePairValue(pairName, key, value)) {
+      values[key] = REDACTED;
+      reports.push({ applied: true, fields: [childPath], replacements: 1 });
+      continue;
+    }
+
     if (shouldRedactSensitiveKeyValue(key, value)) {
       values[key] = REDACTED;
       reports.push({ applied: true, fields: [childPath], replacements: 1 });
@@ -563,6 +573,34 @@ function shouldRedactSensitiveKeyValue(key: string, value: unknown): boolean {
   if (value === null || value === undefined) return false;
   if (!SENSITIVE_KEY.test(key)) return false;
   return !isKnownNonSecretCredentialMode(key, value);
+}
+
+function shouldRedactSensitivePairValue(
+  pairName: string | null,
+  key: string,
+  value: unknown,
+): boolean {
+  if (!pairName || value === null || value === undefined) return false;
+  if (!SENSITIVE_PAIR_VALUE_KEYS.has(key.toLowerCase())) return false;
+  return !isKnownNonSecretCredentialMode(pairName, value);
+}
+
+function sensitivePairName(record: Record<string, unknown>): string | null {
+  for (const [key, value] of Object.entries(record)) {
+    if (!SENSITIVE_PAIR_NAME_KEYS.has(key.toLowerCase())) continue;
+    if (typeof value !== "string") continue;
+    if (isSensitiveNameValuePairName(value)) return value;
+  }
+  return null;
+}
+
+function isSensitiveNameValuePairName(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) return false;
+  return (
+    isSensitiveFlag(normalized) ||
+    SENSITIVE_KEY.test(normalized.replace(/-/g, "_"))
+  );
 }
 
 function isKnownNonSecretCredentialMode(key: string, value: unknown): boolean {
