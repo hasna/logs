@@ -1,5 +1,5 @@
 import type { Database as DbAdapter } from "bun:sqlite";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { LogEntry, LogRow } from "../types/index.ts";
 import { evaluateAlerts } from "./alerts.ts";
 import { publishEventCatalogEvent, publishLogEvent } from "./event-bus.ts";
@@ -11,7 +11,12 @@ import {
 } from "./event-store.ts";
 import { getEvent } from "./events.ts";
 import { upsertIssue } from "./issues.ts";
-import { redactLogEntry } from "./redaction.ts";
+import {
+  mergeRedactionReports,
+  redactLogEntry,
+  redactString,
+  redactionMetadata,
+} from "./redaction.ts";
 
 const ERROR_LEVELS = new Set(["warn", "error", "fatal"]);
 
@@ -20,7 +25,13 @@ export function ingestLog(db: DbAdapter, entry: LogEntry): LogRow {
 }
 
 function ingestLogLocked(db: DbAdapter, entry: LogEntry): LogRow {
-  const eventId = entry.id ?? createEventId();
+  const eventIdRedaction =
+    typeof entry.id === "string" ? redactString(entry.id, "id") : null;
+  const eventId = entry.id
+    ? eventIdRedaction?.report.applied
+      ? createRedactedEventId(entry.id)
+      : entry.id
+    : createEventId();
   const existing = db.prepare("SELECT * FROM logs WHERE id = ?").get(eventId) as
     | LogRow
     | undefined;
@@ -39,6 +50,17 @@ function ingestLogLocked(db: DbAdapter, entry: LogEntry): LogRow {
   };
   const redacted = redactLogEntry(normalized);
   const safeEntry = redacted.value;
+  if (eventIdRedaction?.report.applied) {
+    const report = mergeRedactionReports(
+      eventIdRedaction.report,
+      redacted.report,
+    );
+    safeEntry.metadata = {
+      ...(safeEntry.metadata ?? {}),
+      redaction: redactionMetadata(report),
+    };
+  }
+  const safeSourceEventId = safeEntry.source_event_id ?? null;
   const identity = extractIdentity(safeEntry);
   const envelope = createLogEnvelope(
     safeEntry,
@@ -77,7 +99,7 @@ function ingestLogLocked(db: DbAdapter, entry: LogEntry): LogRow {
       {
         event_id: eventId,
         schema_version: envelope.schema_version,
-        source_event_id: sourceEventId,
+        source_event_id: safeSourceEventId,
         event_type: envelope.type,
         event_time: eventTime,
         ingest_time: ingestTime,
@@ -266,4 +288,9 @@ function stringMetadata(
 
 function createEventId(): string {
   return randomBytes(16).toString("hex");
+}
+
+function createRedactedEventId(value: string): string {
+  const digest = createHash("sha256").update(value).digest("hex").slice(0, 32);
+  return `log_redacted_${digest}`;
 }

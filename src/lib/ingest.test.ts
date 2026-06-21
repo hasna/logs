@@ -164,6 +164,97 @@ describe("ingest", () => {
     expect(rawDump).toContain(REDACTED);
   });
 
+  it("redacts top-level producer and identity fields before persistence", () => {
+    const db = createTestDb();
+    const secret = "OPENLOGS_SECRET_CANARY_log_identity_12345";
+    const row = ingestLog(db, {
+      id: "redaction-top-level-log",
+      source_event_id: `producer?token=${secret}`,
+      level: "info",
+      service: `svc?token=${secret}`,
+      message: "top-level identity redaction",
+      machine_id: `machine?token=${secret}`,
+      repo_id: `repo?token=${secret}`,
+      app_id: `app?token=${secret}`,
+      process_id: `process?token=${secret}`,
+      run_id: `run?token=${secret}`,
+      trace_id: `trace?token=${secret}`,
+      span_id: `span?token=${secret}`,
+      parent_span_id: `parent?token=${secret}`,
+      session_id: `session?token=${secret}`,
+      release_id: `release?token=${secret}`,
+      environment: `env?token=${secret}`,
+      agent: `agent?token=${secret}`,
+    });
+
+    expect(row.service).toBe(`svc?token=${REDACTED}`);
+    expect(row.trace_id).toBe(`trace?token=${REDACTED}`);
+    expect(row.session_id).toBe(`session?token=${REDACTED}`);
+    expect(row.agent).toBe(`agent?token=${REDACTED}`);
+    expect(row.metadata).toBeTruthy();
+
+    const rawDump = JSON.stringify(readRawEvent(db, row.id));
+    const indexedDump = JSON.stringify(getEventRecord(db, row.id));
+    expect(rawDump).not.toContain(secret);
+    expect(indexedDump).not.toContain(secret);
+    expect(rawDump).toContain(`producer?token=${REDACTED}`);
+    expect(rawDump).toContain(`run?token=${REDACTED}`);
+    expect(indexedDump).toContain(`trace?token=${REDACTED}`);
+
+    const metadata = JSON.parse(row.metadata ?? "{}") as {
+      redaction?: { fields?: string[]; replacements?: number };
+    };
+    expect(metadata.redaction?.fields).toEqual(
+      expect.arrayContaining([
+        "source_event_id:openlogs_canary",
+        "machine_id:openlogs_canary",
+        "run_id:openlogs_canary",
+        "trace_id:openlogs_canary",
+        "session_id:openlogs_canary",
+        "service:openlogs_canary",
+        "agent:openlogs_canary",
+      ]),
+    );
+    expect(metadata.redaction?.replacements).toBeGreaterThanOrEqual(14);
+  });
+
+  it("derives a stable internal id when a supplied log id needs redaction", () => {
+    const db = createTestDb();
+    const secret = "OPENLOGS_SECRET_CANARY_id_12345";
+    const unsafeId = `producer?token=${secret}`;
+    const first = ingestLog(db, {
+      id: unsafeId,
+      level: "info",
+      message: "id redaction",
+    });
+    const second = ingestLog(db, {
+      id: unsafeId,
+      level: "info",
+      message: "id redaction retry",
+    });
+
+    expect(second).toEqual(first);
+    expect(first.id).toStartWith("log_redacted_");
+    expect(first.id).not.toContain(secret);
+    expect(first.id).not.toContain(REDACTED);
+
+    const raw = readRawEvent(db, first.id);
+    const record = getEventRecord(db, first.id);
+    const persistedDump = JSON.stringify({ first, raw, record });
+    expect(persistedDump).not.toContain(secret);
+    expect(raw?.event_id).toBe(first.id);
+    expect(raw?.source_event_id).toBe(`producer?token=${REDACTED}`);
+    expect(record?.event_id).toBe(first.id);
+    expect(record?.source_event_id).toBe(`producer?token=${REDACTED}`);
+
+    const metadata = JSON.parse(first.metadata ?? "{}") as {
+      redaction?: { fields?: string[] };
+    };
+    expect(metadata.redaction?.fields).toEqual(
+      expect.arrayContaining(["id:openlogs_canary"]),
+    );
+  });
+
   it("uses producer id for idempotent retries", () => {
     const db = createTestDb();
     const first = ingestLog(db, {

@@ -19,6 +19,23 @@ const SENSITIVE_FLAG =
   /^(?:authorization|auth|credentials?|api[-_]?key|token|secret|password|passwd|pwd|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?secret|client[-_]?(?:secret|credentials?))$/i;
 const SENSITIVE_FLAG_NAME =
   /(?:authorization|credentials?\b|api[-_]?key|token|secret|password|passwd|pwd|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?secret|client[-_]?(?:secret|credentials?))/i;
+const LOG_ENTRY_REDACTABLE_TOP_LEVEL_FIELDS = [
+  "id",
+  "source_event_id",
+  "service",
+  "machine_id",
+  "repo_id",
+  "app_id",
+  "process_id",
+  "run_id",
+  "trace_id",
+  "span_id",
+  "parent_span_id",
+  "session_id",
+  "release_id",
+  "environment",
+  "agent",
+] as const;
 
 const STRING_PATTERNS: Array<{
   label: string;
@@ -108,6 +125,13 @@ export function redactLogEntry(entry: LogEntry): RedactionResult<LogEntry> {
   const reports: RedactionReport[] = [];
   const next: LogEntry = { ...entry };
 
+  for (const field of LOG_ENTRY_REDACTABLE_TOP_LEVEL_FIELDS) {
+    const value = entry[field];
+    if (typeof value !== "string") continue;
+    const result = redactString(value, field);
+    next[field] = result.value;
+    reports.push(result.report);
+  }
   if (typeof entry.message === "string") {
     const result = redactString(entry.message, "message");
     next.message = result.value;
