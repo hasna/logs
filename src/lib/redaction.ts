@@ -14,11 +14,11 @@ export interface RedactionResult<T> {
 }
 
 const SENSITIVE_KEY =
-  /(?:authorization|cookie|set-cookie|api[_-]?key|token|secret|password|passwd|pwd|private[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?secret|client[_-]?secret)/i;
+  /(?:authorization|cookie|set-cookie|credentials?\b|api[_-]?key|token|secret|password|passwd|pwd|private[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?secret|client[_-]?(?:secret|credentials?))/i;
 const SENSITIVE_FLAG =
-  /^(?:authorization|auth|api[-_]?key|token|secret|password|passwd|pwd|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?secret|client[-_]?secret)$/i;
+  /^(?:authorization|auth|credentials?|api[-_]?key|token|secret|password|passwd|pwd|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?secret|client[-_]?(?:secret|credentials?))$/i;
 const SENSITIVE_FLAG_NAME =
-  /(?:authorization|api[-_]?key|token|secret|password|passwd|pwd|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?secret|client[-_]?secret)/i;
+  /(?:authorization|credentials?\b|api[-_]?key|token|secret|password|passwd|pwd|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?secret|client[-_]?(?:secret|credentials?))/i;
 
 const STRING_PATTERNS: Array<{
   label: string;
@@ -79,13 +79,16 @@ const STRING_PATTERNS: Array<{
   {
     label: "secret_assignment",
     pattern:
-      /\b(api[_-]?key|token|secret|password|passwd|pwd|access[_-]?token|refresh[_-]?token|client[_-]?secret)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;&}]+)/gi,
-    replacement: (_match, key: string) => `${key}=${REDACTED}`,
+      /(?<![?&])\b(credentials?|api[_-]?key|token|secret|password|passwd|pwd|access[_-]?token|refresh[_-]?token|client[_-]?(?:secret|credentials?))\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;&}]+)/gi,
+    replacement: (match: string, key: string, value: string) =>
+      isKnownNonSecretCredentialAssignment(key, value)
+        ? match
+        : `${key}=${REDACTED}`,
   },
   {
     label: "secret_flag_argument",
     pattern:
-      /(--[A-Za-z0-9._-]*(?:authorization|api[-_]?key|token|secret|password|passwd|pwd|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?secret|client[-_]?secret)[A-Za-z0-9._-]*\s+)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)/gi,
+      /(--[A-Za-z0-9._-]*(?:authorization|credentials?(?!ed)|api[-_]?key|token|secret|password|passwd|pwd|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?secret|client[-_]?(?:secret|credentials?(?!ed)))[A-Za-z0-9._-]*\s+)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)/gi,
     replacement: (_match, prefix: string) => `${prefix}${REDACTED}`,
   },
   {
@@ -96,7 +99,7 @@ const STRING_PATTERNS: Array<{
   {
     label: "secret_query_param",
     pattern:
-      /([?&](?:api[_-]?key|token|secret|password|passwd|pwd|access[_-]?token|refresh[_-]?token|auth|code)=)[^&#\s]+/gi,
+      /([?&](?:credentials?|api[_-]?key|token|secret|password|passwd|pwd|access[_-]?token|refresh[_-]?token|client[_-]?credentials?|auth|code)=)[^&#\s]+/gi,
     replacement: (_match, prefix: string) => `${prefix}${REDACTED}`,
   },
 ];
@@ -148,11 +151,16 @@ export function redactString(
   for (const { label, pattern, replacement } of STRING_PATTERNS) {
     let matched = false;
     output = output.replace(pattern, (...args: string[]) => {
-      matched = true;
-      replacements += 1;
-      if (typeof replacement === "function")
-        return replacement(args[0] ?? "", ...args.slice(1));
-      return replacement;
+      const original = args[0] ?? "";
+      const next =
+        typeof replacement === "function"
+          ? replacement(original, ...args.slice(1))
+          : replacement;
+      if (next !== original) {
+        matched = true;
+        replacements += 1;
+      }
+      return next;
     });
     if (matched) fields.push(`${path}:${label}`);
   }
@@ -206,7 +214,7 @@ export function redactValue<T>(
   const reports: RedactionReport[] = [];
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
     const childPath = `${path}.${key}`;
-    if (SENSITIVE_KEY.test(key) && value !== null && value !== undefined) {
+    if (shouldRedactSensitiveKeyValue(key, value)) {
       values[key] = REDACTED;
       reports.push({ applied: true, fields: [childPath], replacements: 1 });
       continue;
@@ -257,4 +265,37 @@ function isSensitiveFlag(value: string): boolean {
     SENSITIVE_FLAG_NAME.test(normalized) ||
     SENSITIVE_KEY.test(normalized.replace(/-/g, "_"))
   );
+}
+
+function shouldRedactSensitiveKeyValue(key: string, value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (!SENSITIVE_KEY.test(key)) return false;
+  return !isKnownNonSecretCredentialMode(key, value);
+}
+
+function isKnownNonSecretCredentialMode(key: string, value: unknown): boolean {
+  return (
+    key.toLowerCase() === "credentials" &&
+    typeof value === "string" &&
+    isKnownFetchCredentialMode(value)
+  );
+}
+
+function isKnownNonSecretCredentialAssignment(
+  key: string,
+  value: string,
+): boolean {
+  return (
+    key.toLowerCase() === "credentials" && isKnownFetchCredentialMode(value)
+  );
+}
+
+function isKnownFetchCredentialMode(value: string): boolean {
+  const trimmed = value.trim();
+  const unquoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1)
+      : trimmed;
+  return /^(?:include|omit|same-origin)$/i.test(unquoted);
 }
