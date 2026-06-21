@@ -189,6 +189,13 @@ export function redactString(
     if (matched) fields.push(`${path}:${label}`);
   }
 
+  const cookieResult = redactCookieHeaderText(output);
+  if (cookieResult.replacements > 0) {
+    output = cookieResult.value;
+    fields.push(`${path}:cookie_header`);
+    replacements += cookieResult.replacements;
+  }
+
   return {
     value: output,
     report: { applied: replacements > 0, fields, replacements },
@@ -279,6 +286,267 @@ export function redactionMetadata(
 
 function emptyReport(): RedactionReport {
   return { applied: false, fields: [], replacements: 0 };
+}
+
+interface ReplacementRange {
+  start: number;
+  end: number;
+}
+
+interface QuoteToken {
+  quote: string;
+  escaped: boolean;
+  length: number;
+}
+
+interface ParsedQuotedString {
+  contentStart: number;
+  contentEnd: number;
+  end: number;
+}
+
+function redactCookieHeaderText(input: string): {
+  value: string;
+  replacements: number;
+} {
+  const ranges: ReplacementRange[] = [];
+  const keyPattern = /set-cookie|cookie/gi;
+  let match = keyPattern.exec(input);
+
+  while (match) {
+    const keyStart = match.index;
+    const keyEnd = keyStart + match[0].length;
+
+    if (hasCookieKeyBoundary(input, keyStart, keyEnd)) {
+      const quotedKey = parseQuotedKeyContext(input, keyStart, keyEnd);
+      if (quotedKey) {
+        const afterKey = skipHorizontalWhitespace(input, quotedKey.afterKey);
+        if (input[afterKey] === ":") {
+          collectCookieMapValueRanges(input, afterKey + 1, ranges);
+          match = keyPattern.exec(input);
+          continue;
+        }
+        if (input[afterKey] === ",") {
+          const value = parseQuotedString(
+            input,
+            skipHorizontalWhitespace(input, afterKey + 1),
+          );
+          if (value) ranges.push(quotedStringRange(value));
+          match = keyPattern.exec(input);
+          continue;
+        }
+      }
+
+      collectPlainCookieHeaderRange(input, keyEnd, ranges);
+    }
+    match = keyPattern.exec(input);
+  }
+
+  return applyReplacementRanges(input, ranges);
+}
+
+function hasCookieKeyBoundary(
+  input: string,
+  start: number,
+  end: number,
+): boolean {
+  return (
+    !isCookieKeyCharacter(input[start - 1]) && !isCookieKeyCharacter(input[end])
+  );
+}
+
+function isCookieKeyCharacter(value: string | undefined): boolean {
+  return value !== undefined && /[A-Za-z0-9_-]/.test(value);
+}
+
+function parseQuotedKeyContext(
+  input: string,
+  start: number,
+  end: number,
+): { afterKey: number } | null {
+  const before = readQuoteBefore(input, start);
+  const after = readQuoteAt(input, end);
+  if (!before || !after) return null;
+  if (before.quote !== after.quote || before.escaped !== after.escaped) {
+    return null;
+  }
+  return { afterKey: end + after.length };
+}
+
+function collectCookieMapValueRanges(
+  input: string,
+  start: number,
+  ranges: ReplacementRange[],
+): void {
+  const valueStart = skipHorizontalWhitespace(input, start);
+  if (input[valueStart] === "[") {
+    collectQuotedArrayValueRanges(input, valueStart, ranges);
+    return;
+  }
+  const value = parseQuotedString(input, valueStart);
+  if (value) ranges.push(quotedStringRange(value));
+}
+
+function collectQuotedArrayValueRanges(
+  input: string,
+  start: number,
+  ranges: ReplacementRange[],
+): void {
+  let index = start + 1;
+  while (index < input.length) {
+    index = skipHorizontalWhitespace(input, index);
+    if (input[index] === "]" || isLineBreak(input[index])) return;
+
+    const value = parseQuotedString(input, index);
+    if (value) {
+      ranges.push(quotedStringRange(value));
+      index = value.end;
+      continue;
+    }
+
+    index += 1;
+  }
+}
+
+function collectPlainCookieHeaderRange(
+  input: string,
+  start: number,
+  ranges: ReplacementRange[],
+): void {
+  let index = skipHorizontalWhitespace(input, start);
+  if (input[index] !== ":" && input[index] !== "=") return;
+  index = skipHorizontalWhitespace(input, index + 1);
+  const end = findLineEnd(input, index);
+  if (end > index) ranges.push({ start: index, end });
+}
+
+function parseQuotedString(
+  input: string,
+  start: number,
+): ParsedQuotedString | null {
+  const open = readQuoteAt(input, start);
+  if (!open) return null;
+
+  const contentStart = start + open.length;
+  const closeStart = findClosingQuote(input, contentStart, open);
+  if (closeStart === null) return null;
+  return {
+    contentStart,
+    contentEnd: closeStart,
+    end: closeStart + open.length,
+  };
+}
+
+function quotedStringRange(value: ParsedQuotedString): ReplacementRange {
+  return { start: value.contentStart, end: value.contentEnd };
+}
+
+function findClosingQuote(
+  input: string,
+  start: number,
+  token: QuoteToken,
+): number | null {
+  let index = start;
+  while (index < input.length) {
+    if (isLineBreak(input[index])) return null;
+
+    if (token.escaped) {
+      if (input[index] === "\\" && input[index + 1] === token.quote) {
+        const slashCount = countContiguousBackslashesEndingAt(input, index);
+        if (slashCount === 1) return index;
+        index += 2;
+        continue;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (input[index] === "\\") {
+      index += 2;
+      continue;
+    }
+    if (input[index] === token.quote) return index;
+    index += 1;
+  }
+  return null;
+}
+
+function readQuoteBefore(input: string, index: number): QuoteToken | null {
+  const escapedQuote = input.slice(index - 2, index);
+  if (escapedQuote === '\\"' || escapedQuote === "\\'") {
+    return { quote: escapedQuote[1], escaped: true, length: 2 };
+  }
+  const quote = input[index - 1];
+  return quote === '"' || quote === "'"
+    ? { quote, escaped: false, length: 1 }
+    : null;
+}
+
+function readQuoteAt(input: string, index: number): QuoteToken | null {
+  const escapedQuote = input.slice(index, index + 2);
+  if (escapedQuote === '\\"' || escapedQuote === "\\'") {
+    return { quote: escapedQuote[1], escaped: true, length: 2 };
+  }
+  const quote = input[index];
+  return quote === '"' || quote === "'"
+    ? { quote, escaped: false, length: 1 }
+    : null;
+}
+
+function skipHorizontalWhitespace(input: string, start: number): number {
+  let index = start;
+  while (input[index] === " " || input[index] === "\t") index += 1;
+  return index;
+}
+
+function findLineEnd(input: string, start: number): number {
+  let index = start;
+  while (index < input.length && !isLineBreak(input[index])) index += 1;
+  return index;
+}
+
+function isLineBreak(value: string | undefined): boolean {
+  return value === "\n" || value === "\r";
+}
+
+function countContiguousBackslashesEndingAt(
+  input: string,
+  index: number,
+): number {
+  let count = 0;
+  let cursor = index;
+  while (cursor >= 0 && input[cursor] === "\\") {
+    count += 1;
+    cursor -= 1;
+  }
+  return count;
+}
+
+function applyReplacementRanges(
+  input: string,
+  ranges: ReplacementRange[],
+): { value: string; replacements: number } {
+  const sorted = ranges
+    .filter((range) => range.end > range.start)
+    .sort((a, b) => a.start - b.start);
+  const deduped: ReplacementRange[] = [];
+  let lastEnd = -1;
+  for (const range of sorted) {
+    if (range.start < lastEnd) continue;
+    deduped.push(range);
+    lastEnd = range.end;
+  }
+
+  let value = input;
+  let replacements = 0;
+  for (let index = deduped.length - 1; index >= 0; index -= 1) {
+    const range = deduped[index];
+    if (value.slice(range.start, range.end) === REDACTED) continue;
+    value = `${value.slice(0, range.start)}${REDACTED}${value.slice(range.end)}`;
+    replacements += 1;
+  }
+
+  return { value, replacements };
 }
 
 function isSensitiveFlag(value: string): boolean {

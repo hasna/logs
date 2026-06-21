@@ -58,6 +58,88 @@ describe("redaction", () => {
     });
   });
 
+  it("redacts cookie headers in plain text and serialized header maps", () => {
+    const secret = "session-secret-12345";
+    const cases = [
+      {
+        input: `Cookie: sid=${secret}; theme=dark`,
+        output: `Cookie: ${REDACTED}`,
+      },
+      {
+        input: `Set-Cookie: sid=${secret}; HttpOnly; Secure`,
+        output: `Set-Cookie: ${REDACTED}`,
+      },
+      {
+        input: `cookie=sid=${secret}; theme=dark`,
+        output: `cookie=${REDACTED}`,
+      },
+      {
+        input: `{"cookie":"sid=${secret}; theme=dark"}`,
+        output: `{"cookie":"${REDACTED}"}`,
+      },
+      {
+        input: `{"set-cookie":"sid=\\"${secret}\\"; HttpOnly"}`,
+        output: `{"set-cookie":"${REDACTED}"}`,
+      },
+      {
+        input: `{\\\"set-cookie\\\":\\\"sid=${secret}; HttpOnly\\\"}`,
+        output: `{\\\"set-cookie\\\":\\\"${REDACTED}\\\"}`,
+      },
+      {
+        input: `{\\\"set-cookie\\\":\\\"sid=\\\\\\\"${secret}\\\\\\\"; HttpOnly\\\"}`,
+        output: `{\\\"set-cookie\\\":\\\"${REDACTED}\\\"}`,
+      },
+      {
+        input: `{"set-cookie":["sid=${secret}; HttpOnly"]}`,
+        output: `{"set-cookie":["${REDACTED}"]}`,
+      },
+      {
+        input: `{"set-cookie":["sid=\\"${secret}\\"; HttpOnly"]}`,
+        output: `{"set-cookie":["${REDACTED}"]}`,
+      },
+      {
+        input: `{"headers":{"cookie":["sid=${secret}; theme=dark"]}}`,
+        output: `{"headers":{"cookie":["${REDACTED}"]}}`,
+      },
+      {
+        input: `[["cookie","sid=${secret}; theme=dark"]]`,
+        output: `[["cookie","${REDACTED}"]]`,
+      },
+      {
+        input: `[["cookie","sid=\\"${secret}\\"; theme=dark"]]`,
+        output: `[["cookie","${REDACTED}"]]`,
+      },
+      {
+        input: `Cookie: sid=abc]${secret}; theme=dark`,
+        output: `Cookie: ${REDACTED}`,
+      },
+      {
+        input: `Set-Cookie: sid=abc}${secret}; HttpOnly`,
+        output: `Set-Cookie: ${REDACTED}`,
+      },
+    ];
+
+    for (const { input, output } of cases) {
+      const result = redactString(input, "message");
+
+      expect(result.value).toBe(output);
+      expect(result.value).not.toContain(secret);
+      expect(result.report).toMatchObject({
+        applied: true,
+        replacements: 1,
+        fields: ["message:cookie_header"],
+      });
+    }
+
+    const publicText = redactString("cookie banner accepted", "message");
+    expect(publicText.value).toBe("cookie banner accepted");
+    expect(publicText.report).toMatchObject({
+      applied: false,
+      fields: [],
+      replacements: 0,
+    });
+  });
+
   it("redacts generic credential fields and assignments", () => {
     const secret = "plain-credential-value";
     const value = redactValue(
