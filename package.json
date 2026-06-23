@@ -7,10 +7,11 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
     "./storage": {
+      "types": "./dist/storage.d.ts",
       "import": "./dist/storage.js"
     }
   },
@@ -19,12 +20,10 @@
     "logs-mcp": "./dist/mcp/index.js",
     "logs-serve": "./dist/server/index.js"
   },
-  "files": [
-    "dist",
-    "dashboard/dist"
-  ],
+  "files": ["dist", "dashboard/dist"],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/mcp/index.ts src/server/index.ts src/index.ts src/storage.ts --outdir dist --target bun --splitting --external playwright --external playwright-core --external electron --external chromium-bidi --external lighthouse",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/mcp/index.ts src/server/index.ts src/index.ts src/storage.ts --outdir dist --target bun --splitting --external playwright --external playwright-core --external electron --external chromium-bidi --external lighthouse && bun scripts/build-types.ts",
+    "build:types": "bun scripts/build-types.ts",
     "build:dashboard": "cd dashboard && bun run build",
     "build:all": "bun run build:dashboard && bun run build",
     "dev": "bun run src/server/index.ts",
@@ -38,7 +37,11 @@
     "validate:stress": "bun scripts/high-volume-ingest-stress.ts",
     "validate:structured-logs": "bun scripts/structured-log-validation-lab.ts",
     "validate:streams": "bun scripts/stream-load-validation.ts",
+    "validate:pack": "bun scripts/validate-package.ts",
+    "validate:package": "bun run validate:pack",
     "lint": "biome check src/",
+    "prepack": "bun run build",
+    "prepublishOnly": "bun run validate:package",
     "postinstall": "mkdir -p $HOME/.hasna/logs 2>/dev/null || true"
   },
   "repository": {
