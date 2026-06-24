@@ -26,6 +26,27 @@ logs --help
 - `logs scan`
 - `logs diagnose`
 
+### Compact Output Defaults
+
+CLI list/status/search commands are compact by default so agent terminals do not
+fill with large records. Human output uses capped row counts, shortened IDs, and
+truncated long text.
+
+Use gradual disclosure when you need more:
+
+```bash
+logs list --limit 25 --offset 25
+logs list --verbose
+logs list --json
+logs events list --json --include-raw
+logs events get <event_id>
+logs test-reports get <report_id>
+logs health --json
+```
+
+Most list commands support `--limit`; larger result sets print a next-page
+offset hint. Detail commands and `--json` retain full machine-readable records.
+
 ## MCP Server
 
 ```bash
@@ -33,6 +54,10 @@ logs-mcp
 ```
 
 Includes log search, raw event search/watch/export, projected test-report search/get, storage sync, scan, issue, and performance tools.
+
+MCP list/search/status tools also default to compact payloads. Pass
+`brief: false`, `verbose: true`, `include_raw: true`, or use a `*_get` detail
+tool when an agent needs the complete object.
 
 ## HTTP mode
 

@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { ingestLog } from "../lib/ingest.ts";
+import { upsertIssue } from "../lib/issues.ts";
 
 const entry = fileURLToPath(new URL("./index.ts", import.meta.url));
 
@@ -188,6 +190,85 @@ test("logs MCP watches event catalog records by cursor", async () => {
       reason: "last_event_id_unknown",
       last_event_id: "missing-mcp-cursor",
     });
+  } finally {
+    await client.close().catch(() => {});
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("MCP log_context_from_id keeps the target log when capped", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "open-logs-mcp-context-cap-"));
+  const { client, transport } = createMcpClient(dataDir);
+
+  try {
+    await client.connect(transport);
+    const db = new Database(join(dataDir, "logs.db"));
+    try {
+      for (let i = 0; i < 40; i += 1) {
+        ingestLog(db, {
+          id: `context-cap-${String(i).padStart(2, "0")}`,
+          timestamp: `2026-01-01T00:00:${String(i).padStart(2, "0")}.000Z`,
+          level: "info",
+          message: `context cap row ${i}`,
+          trace_id: "context-cap-trace",
+        });
+      }
+    } finally {
+      db.close();
+    }
+
+    const result = await client.callTool({
+      name: "log_context_from_id",
+      arguments: {
+        log_id: "context-cap-34",
+        limit: 5,
+      },
+    });
+    const rows = JSON.parse(textContent(result)) as Array<{ id: string }>;
+    expect(rows).toHaveLength(5);
+    expect(rows.map((row) => row.id)).toContain("context-cap-34");
+  } finally {
+    await client.close().catch(() => {});
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("MCP list_issues compacts long issue messages by default", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "open-logs-mcp-issues-compact-"));
+  const { client, transport } = createMcpClient(dataDir);
+  const longMessage = `issue compact canary ${"z".repeat(240)} end`;
+
+  try {
+    await client.connect(transport);
+    const db = new Database(join(dataDir, "logs.db"));
+    try {
+      upsertIssue(db, {
+        level: "error",
+        service: "issue-service-with-a-long-name",
+        message: longMessage,
+      });
+    } finally {
+      db.close();
+    }
+
+    const result = await client.callTool({
+      name: "list_issues",
+      arguments: {},
+    });
+    const rows = JSON.parse(textContent(result)) as Array<{
+      message_template: string;
+    }>;
+    expect(rows[0]?.message_template).toContain("issue compact canary");
+    expect(rows[0]?.message_template).not.toContain(" end");
+
+    const full = await client.callTool({
+      name: "list_issues",
+      arguments: { brief: false },
+    });
+    const fullRows = JSON.parse(textContent(full)) as Array<{
+      message_template: string;
+    }>;
+    expect(fullRows[0]?.message_template).toBe(longMessage);
   } finally {
     await client.close().catch(() => {});
     rmSync(dataDir, { recursive: true, force: true });
@@ -478,7 +559,27 @@ test("MCP event_search and event_watch hide internal tool telemetry by default",
         limit: 20,
       },
     });
-    const internalRows = JSON.parse(textContent(internalSearch)) as Array<{
+    const compactInternalRows = JSON.parse(
+      textContent(internalSearch),
+    ) as Array<{
+      message: string;
+      metadata?: unknown;
+      has_metadata?: boolean;
+    }>;
+    expect(compactInternalRows.some((row) => row.has_metadata)).toBe(true);
+    expect(compactInternalRows.some((row) => row.metadata)).toBe(false);
+
+    const fullInternalSearch = await client.callTool({
+      name: "event_search",
+      arguments: {
+        event_type: "agent",
+        source: "mcp",
+        include_internal: true,
+        brief: false,
+        limit: 20,
+      },
+    });
+    const internalRows = JSON.parse(textContent(fullInternalSearch)) as Array<{
       message: string;
       metadata: Record<string, unknown> | null;
     }>;
