@@ -58,6 +58,12 @@ interface LabReport {
     event_type: string;
     message: string | null;
   }>;
+  crash_recovery: {
+    event_id: string;
+    crash_exit_code: number;
+    before_rebuild: Record<string, unknown>;
+    rebuild: Record<string, unknown>;
+  };
   run_summary: Record<string, unknown>;
   artifact_run_summary: Record<string, unknown>;
   test_report_run_summary: Record<string, unknown>;
@@ -958,6 +964,86 @@ try {
   );
   const remoteWatchEvents = [...remoteCatchupEvents, ...remoteLiveEvents];
 
+  const crashEventId = `${labId}-crash-raw-before-index`;
+  expectedEventIds.push(crashEventId);
+  const crash = await runRawAppendCrashWorker(crashEventId);
+  commands.push(crash);
+  assert(
+    crash.exit_code === 42,
+    "crash drill producer exited after raw append before indexing",
+  );
+  assert(crash.stderr === "", "crash drill producer wrote no stderr");
+
+  const preRebuildDoctor = await runCliWithAllowedExitCodes(
+    "logs doctor segments before crash rebuild",
+    ["doctor", "segments", "--json"],
+    [1],
+  );
+  commands.push(preRebuildDoctor);
+  const preRebuildDoctorResult = JSON.parse(preRebuildDoctor.stdout) as Record<
+    string,
+    unknown
+  >;
+  assert(
+    preRebuildDoctorResult.ok === false,
+    "doctor segments detected crash-appended raw event before rebuild",
+  );
+  assert(
+    readRequiredNumber(preRebuildDoctorResult, "unindexed_raw_events") === 1,
+    "doctor segments reported exactly one unindexed crash-drill raw event",
+  );
+  assert(
+    JSON.stringify(preRebuildDoctorResult.errors ?? []).includes(
+      "Raw event is not indexed in SQLite",
+    ),
+    "doctor segments explained the unindexed crash-drill raw event",
+  );
+
+  const crashRebuild = await runCli("logs doctor rebuild-index after crash", [
+    "doctor",
+    "rebuild-index",
+    "--json",
+  ]);
+  commands.push(crashRebuild);
+  const crashRebuildResult = JSON.parse(crashRebuild.stdout) as Record<
+    string,
+    unknown
+  >;
+  const crashRebuildStats = objectValue(crashRebuildResult.rebuild);
+  const crashRebuildVerification = objectValue(crashRebuildResult.verification);
+  assert(
+    crashRebuildStats?.errors &&
+      Array.isArray(crashRebuildStats.errors) &&
+      crashRebuildStats.errors.length === 0,
+    "crash rebuild completed without rebuild errors",
+  );
+  assert(
+    crashRebuildVerification?.ok === true,
+    "crash rebuild verification returned to ok",
+  );
+  assert(
+    readRequiredNumber(
+      crashRebuildVerification ?? {},
+      "unindexed_raw_events",
+    ) === 0,
+    "crash rebuild cleared all unindexed raw events",
+  );
+  const crashRecord = readEventRecord(dbPath, crashEventId);
+  assert(
+    crashRecord?.event_type === "log",
+    "crash rebuild indexed the raw-appended log event",
+  );
+  assert(
+    readLogMessage(dbPath, crashEventId) === "producer died after raw append",
+    "crash rebuild reconstructed the log projection from raw evidence",
+  );
+  const crashRecovery = {
+    event_id: crashEventId,
+    crash_exit_code: crash.exit_code,
+    before_rebuild: preRebuildDoctorResult,
+    rebuild: crashRebuildResult,
+  };
+
   const exportFile = join(dataDir, "events-export.json");
   commands.push(
     await runCli("logs events export", [
@@ -1039,6 +1125,7 @@ try {
     commands,
     streamed_events: streamedEvents,
     remote_watch_events: remoteWatchEvents,
+    crash_recovery: crashRecovery,
     run_summary: runSummary,
     artifact_run_summary: artifactRunSummary,
     test_report_run_summary: testReportRunSummary,
@@ -1155,6 +1242,21 @@ async function runCli(label: string, args: string[]): Promise<CommandResult> {
   );
 }
 
+async function runCliWithAllowedExitCodes(
+  label: string,
+  args: string[],
+  allowedExitCodes: number[],
+): Promise<CommandResult> {
+  const child = spawnCli(args);
+  return await waitForProcess(
+    label,
+    [process.execPath, "src/cli/index.ts", ...args],
+    child,
+    20_000,
+    allowedExitCodes,
+  );
+}
+
 function spawnCli(
   args: string[],
 ): ReturnType<typeof Bun.spawn<"ignore", "pipe", "pipe">> {
@@ -1165,6 +1267,60 @@ function spawnCli(
     stdout: "pipe",
     stderr: "pipe",
   });
+}
+
+async function runRawAppendCrashWorker(
+  eventId: string,
+): Promise<CommandResult> {
+  const script = `
+    import { getDb } from "./src/db/index.ts";
+    import { appendRawEvent } from "./src/lib/event-store.ts";
+
+    const db = getDb();
+    const now = new Date().toISOString();
+    appendRawEvent(db, {
+      schema_version: 1,
+      event_id: ${JSON.stringify(eventId)},
+      source_event_id: "producer-crash-raw-before-index",
+      event_time: now,
+      ingest_time: now,
+      type: "log",
+      source: "sdk",
+      severity: "error",
+      privacy: "internal",
+      message: "producer died after raw append",
+      body: {
+        log: {
+          id: ${JSON.stringify(eventId)},
+          timestamp: now,
+          level: "error",
+          source: "sdk",
+          service: "crash-drill",
+          message: "producer died after raw append",
+          metadata: { crash_drill: true },
+        },
+      },
+      attributes: {
+        service: "crash-drill",
+        privacy_tier: "internal",
+      },
+    });
+    process.exit(42);
+  `;
+  const child = Bun.spawn([process.execPath, "-e", script], {
+    cwd: repoRoot,
+    env,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return await waitForProcess(
+    "raw append crash worker",
+    [process.execPath, "-e", "/* raw append crash worker */"],
+    child,
+    20_000,
+    [42],
+  );
 }
 
 async function waitForProcess(
@@ -1503,6 +1659,18 @@ function readEventRecord(
       source_event_id: string | null;
       metadata: string | null;
     } | null;
+  } finally {
+    db.close();
+  }
+}
+
+function readLogMessage(dbFile: string, logId: string): string | null {
+  const db = new Database(dbFile, { readonly: true });
+  try {
+    const row = db
+      .prepare("SELECT message FROM logs WHERE id = ?")
+      .get(logId) as { message: string | null } | null;
+    return row?.message ?? null;
   } finally {
     db.close();
   }
