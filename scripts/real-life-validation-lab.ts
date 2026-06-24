@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -14,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { createPinoOpenLogsTransport } from "../sdk/src/index.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -63,6 +65,17 @@ interface LabReport {
     crash_exit_code: number;
     before_rebuild: Record<string, unknown>;
     rebuild: Record<string, unknown>;
+  };
+  collector_restart_high_volume: {
+    event_count: number;
+    spool_file: string;
+    spooled_records: number;
+    spool_loaded: number;
+    replay_sent: number;
+    matching_logs: number;
+    raw_backed_events: number;
+    sample_event_ids: string[];
+    spool_file_cleared: boolean;
   };
   run_summary: Record<string, unknown>;
   artifact_run_summary: Record<string, unknown>;
@@ -964,6 +977,19 @@ try {
   );
   const remoteWatchEvents = [...remoteCatchupEvents, ...remoteLiveEvents];
 
+  const collectorRestartHighVolume =
+    await runCollectorRestartHighVolumeScenario({
+      baseUrl,
+      port,
+      token,
+      projectId,
+      labId,
+      dataDir,
+      dbPath,
+      eventCount: 120,
+    });
+  expectedEventIds.push(...collectorRestartHighVolume.sample_event_ids);
+
   const crashEventId = `${labId}-crash-raw-before-index`;
   expectedEventIds.push(crashEventId);
   const crash = await runRawAppendCrashWorker(crashEventId);
@@ -1126,6 +1152,7 @@ try {
     streamed_events: streamedEvents,
     remote_watch_events: remoteWatchEvents,
     crash_recovery: crashRecovery,
+    collector_restart_high_volume: collectorRestartHighVolume,
     run_summary: runSummary,
     artifact_run_summary: artifactRunSummary,
     test_report_run_summary: testReportRunSummary,
@@ -1470,6 +1497,222 @@ function mcpToolText(result: unknown): string {
   const first = content[0];
   const text = objectValue(first)?.text;
   return typeof text === "string" ? text : "";
+}
+
+async function runCollectorRestartHighVolumeScenario(input: {
+  baseUrl: string;
+  port: number;
+  token: string;
+  projectId: string;
+  labId: string;
+  dataDir: string;
+  dbPath: string;
+  eventCount: number;
+}): Promise<LabReport["collector_restart_high_volume"]> {
+  assert(server, "collector restart drill starts with a live server process");
+  const spoolDirectory = join(input.dataDir, "collector-restart-sdk-spool");
+  const messagePrefix = `${input.labId} collector restart high-volume`;
+
+  await stopServer(server);
+  server = undefined;
+  await sleep(100);
+
+  const stoppedTransport = createPinoOpenLogsTransport({
+    url: input.baseUrl,
+    apiKey: input.token,
+    projectId: input.projectId,
+    service: "real-life-restart-producer",
+    environment: "test",
+    maxBatchSize: input.eventCount + 1,
+    maxQueueSize: input.eventCount + 10,
+    maxRetries: 0,
+    retryBaseDelayMs: 0,
+    flushIntervalMs: 60_000,
+    sourceEventPrefix: `${input.labId}:collector-restart`,
+    spoolDirectory,
+    metadata: {
+      validation_id: input.labId,
+      scenario: "collector_restart_high_volume",
+    },
+  });
+  for (let index = 0; index < input.eventCount; index += 1) {
+    stoppedTransport.write(
+      `${JSON.stringify({
+        level: 30,
+        time: Date.now() + index,
+        msg: `${messagePrefix} ${String(index).padStart(3, "0")}`,
+        traceId: `${input.labId}-collector-restart-trace`,
+        sequence: index,
+        validation_id: input.labId,
+        restart_drill: true,
+      })}\n`,
+    );
+  }
+  assert(
+    stoppedTransport.stats().pending === input.eventCount,
+    "collector restart drill queued high-volume records while collector was stopped",
+  );
+  let failedFlush = false;
+  try {
+    await stoppedTransport.flush();
+  } catch {
+    failedFlush = true;
+  }
+  assert(
+    failedFlush,
+    "collector restart drill observed a failed flush while collector was stopped",
+  );
+  assert(
+    stoppedTransport.stats().spool_pending === input.eventCount,
+    "collector restart drill retained all stopped-collector records in the SDK spool",
+  );
+  stoppedTransport.stop();
+  await sleep(250);
+
+  const spoolFile = findStructuredSpoolFile(spoolDirectory);
+  const spooledRecords = countSpoolRecords(spoolFile);
+  assert(
+    spooledRecords === input.eventCount,
+    "collector restart drill wrote every high-volume record to the SDK spool file",
+  );
+
+  server = Bun.spawn([process.execPath, "src/server/index.ts"], {
+    cwd: repoRoot,
+    env: { ...env, LOGS_PORT: String(input.port) },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  await waitForHealth(input.baseUrl, server);
+
+  const replayTransport = createPinoOpenLogsTransport({
+    url: input.baseUrl,
+    apiKey: input.token,
+    projectId: input.projectId,
+    service: "wrong-restart-service",
+    environment: "wrong-restart-env",
+    maxBatchSize: input.eventCount + 1,
+    maxQueueSize: input.eventCount + 10,
+    maxRetries: 0,
+    retryBaseDelayMs: 0,
+    flushIntervalMs: 60_000,
+    sourceEventPrefix: "wrong-restart-prefix",
+    spoolDirectory,
+  });
+  const loadedStats = replayTransport.stats();
+  assert(
+    loadedStats.spool_loaded === input.eventCount,
+    "collector restart drill loaded every spooled record after process restart",
+  );
+  await replayTransport.flush();
+  const replayStats = replayTransport.stats();
+  replayTransport.stop();
+  assert(
+    replayStats.sent === input.eventCount,
+    "collector restart drill replayed every high-volume record after restart",
+  );
+  assert(
+    replayStats.pending === 0,
+    "collector restart drill left no pending records after replay",
+  );
+  const spoolFileCleared = !structuredSpoolFileExists(spoolDirectory);
+  assert(
+    spoolFileCleared,
+    "collector restart drill cleared the SDK spool file after replay",
+  );
+
+  const replayRows = readCollectorRestartRows(input.dbPath, messagePrefix);
+  assert(
+    replayRows.length === input.eventCount,
+    "collector restart drill indexed every replayed high-volume log",
+  );
+  const rawBackedEvents = replayRows.filter(
+    (row) =>
+      row.segment_path.length > 0 &&
+      row.byte_length > 0 &&
+      /^[a-f0-9]{64}$/.test(row.record_hash),
+  ).length;
+  assert(
+    rawBackedEvents === input.eventCount,
+    "collector restart drill preserved raw segment pointers for every replayed high-volume log",
+  );
+  const sampleEventIds = Array.from(
+    new Set(
+      [
+        ...replayRows.slice(0, 3).map((row) => row.event_id),
+        replayRows.at(-1)?.event_id,
+      ].filter((eventId): eventId is string => Boolean(eventId)),
+    ),
+  );
+
+  return {
+    event_count: input.eventCount,
+    spool_file: spoolFile,
+    spooled_records: spooledRecords,
+    spool_loaded: loadedStats.spool_loaded,
+    replay_sent: replayStats.sent,
+    matching_logs: replayRows.length,
+    raw_backed_events: rawBackedEvents,
+    sample_event_ids: sampleEventIds,
+    spool_file_cleared: spoolFileCleared,
+  };
+}
+
+function findStructuredSpoolFile(spoolDirectory: string): string {
+  assert(existsSync(spoolDirectory), "SDK spool directory exists");
+  const spoolFileName = readdirSync(spoolDirectory).find((file) =>
+    file.endsWith("structured-spool.jsonl"),
+  );
+  assert(spoolFileName, "SDK structured spool file exists");
+  return join(spoolDirectory, spoolFileName);
+}
+
+function structuredSpoolFileExists(spoolDirectory: string): boolean {
+  return (
+    existsSync(spoolDirectory) &&
+    readdirSync(spoolDirectory).some((file) =>
+      file.endsWith("structured-spool.jsonl"),
+    )
+  );
+}
+
+function countSpoolRecords(spoolFile: string): number {
+  return readFileSync(spoolFile, "utf8")
+    .split(/\n/)
+    .filter((line) => line.trim().length > 0).length;
+}
+
+function readCollectorRestartRows(
+  dbFile: string,
+  messagePrefix: string,
+): Array<{
+  event_id: string;
+  segment_path: string;
+  byte_length: number;
+  record_hash: string;
+}> {
+  const db = new Database(dbFile, { readonly: true });
+  try {
+    return db
+      .prepare(
+        `
+          SELECT
+            event_id, segment_path, byte_length, record_hash
+          FROM event_records
+          WHERE event_type = 'log'
+            AND message LIKE ?
+          ORDER BY message
+        `,
+      )
+      .all(`${messagePrefix}%`) as Array<{
+      event_id: string;
+      segment_path: string;
+      byte_length: number;
+      record_hash: string;
+    }>;
+  } finally {
+    db.close();
+  }
 }
 
 function assertNoRawTestReportPayload(value: unknown, label: string): void {
