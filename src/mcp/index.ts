@@ -84,6 +84,9 @@ export function buildServer(): McpServer {
     "message",
     "service",
   ];
+  const MCP_DEFAULT_LIMIT = 25;
+  const MCP_MAX_LIMIT = 1_000;
+  const MCP_TEXT_LIMIT = 160;
 
   // biome-ignore lint/suspicious/noExplicitAny: MCP SDK tool handlers are dynamically typed from their Zod schemas.
   type McpToolHandler = (...args: any[]) => any;
@@ -103,12 +106,109 @@ export function buildServer(): McpServer {
       id: r.id,
       timestamp: r.timestamp,
       level: r.level,
-      message: r.message,
-      service: r.service,
+      message: compactMcpText(r.message, MCP_TEXT_LIMIT),
+      service: compactMcpText(r.service, 48),
       age_seconds: Math.floor(
         (Date.now() - new Date(r.timestamp).getTime()) / 1000,
       ),
     }));
+  }
+
+  function compactMcpText(
+    value: string | null | undefined,
+    max = MCP_TEXT_LIMIT,
+  ): string | null {
+    if (value === null || value === undefined) return null;
+    const singleLine = value.replace(/\s+/g, " ").trim();
+    if (singleLine.length <= max) return singleLine;
+    return `${singleLine.slice(0, Math.max(0, max - 3))}...`;
+  }
+
+  function clampMcpListLimit(
+    value: number | undefined,
+    fallback = MCP_DEFAULT_LIMIT,
+  ): number {
+    if (!Number.isFinite(value) || value === undefined) return fallback;
+    return Math.min(Math.max(1, Math.floor(value)), MCP_MAX_LIMIT);
+  }
+
+  function resolveMcpContextLimit(
+    value: number | undefined,
+    brief: boolean | undefined,
+    total: number,
+  ): number {
+    if (value !== undefined) return clampMcpListLimit(value);
+    return brief === false ? total : MCP_DEFAULT_LIMIT;
+  }
+
+  function sliceMcpContextRows(
+    rows: LogRow[],
+    limit: number,
+    targetLogId?: string,
+  ): LogRow[] {
+    if (limit <= 0 || rows.length <= limit) return rows;
+    if (!targetLogId) return rows.slice(0, limit);
+    const targetIndex = rows.findIndex((row) => row.id === targetLogId);
+    if (targetIndex < 0 || targetIndex < limit) return rows.slice(0, limit);
+    const halfWindow = Math.floor(limit / 2);
+    const start = Math.min(
+      Math.max(0, targetIndex - halfWindow),
+      Math.max(0, rows.length - limit),
+    );
+    return rows.slice(start, start + limit);
+  }
+
+  function compactMcpEvent(row: EventCatalogEntry): Record<string, unknown> {
+    return {
+      event_id: row.event_id,
+      event_time: row.event_time,
+      event_type: row.event_type,
+      source: row.source,
+      severity: row.severity,
+      project_id: row.project_id,
+      trace_id: row.trace_id,
+      run_id: row.run_id,
+      message: compactMcpText(row.message),
+      has_metadata: Boolean(row.metadata && Object.keys(row.metadata).length),
+      has_raw: Boolean(row.raw),
+    };
+  }
+
+  function compactMcpTestReport(report: {
+    id: string;
+    event_id: string | null;
+    event_time: string | null;
+    parser: string | null;
+    parse_status: string | null;
+    path: string | null;
+    tests: number | null;
+    failures: number | null;
+    errors: number | null;
+    skipped: number | null;
+    case_stored_count: number;
+    truncated: boolean;
+  }): Record<string, unknown> {
+    return {
+      id: report.id,
+      event_id: report.event_id,
+      event_time: report.event_time,
+      parser: report.parser,
+      parse_status: report.parse_status,
+      path: compactMcpText(report.path, 120),
+      tests: report.tests,
+      failures: report.failures,
+      errors: report.errors,
+      skipped: report.skipped,
+      case_stored_count: report.case_stored_count,
+      truncated: report.truncated,
+    };
+  }
+
+  function compactObjectFields<T extends Record<string, unknown>>(
+    value: T,
+    fields: Array<keyof T>,
+  ): Record<string, unknown> {
+    return Object.fromEntries(fields.map((field) => [field, value[field]]));
   }
 
   function rp(idOrName?: string): string | undefined {
@@ -152,11 +252,11 @@ export function buildServer(): McpServer {
     log_search: {
       desc: "Search logs",
       params:
-        "(project_id?, level?, since?, until?, text?, service?, limit?=100, brief?=true)",
+        "(project_id?, level?, since?, until?, text?, service?, limit?=25, brief?=true)",
     },
     log_tail: {
       desc: "Get N most recent logs",
-      params: "(project_id?, n?=50, brief?=true)",
+      params: "(project_id?, n?=25, brief?=true)",
     },
     log_count: {
       desc: "Count logs — zero token cost, pure signal",
@@ -171,12 +271,12 @@ export function buildServer(): McpServer {
       params: "(project_id?, since?)",
     },
     log_context: {
-      desc: "All logs for a trace_id",
-      params: "(trace_id, brief?=true)",
+      desc: "Logs for a trace_id; brief mode is capped by default",
+      params: "(trace_id, brief?=true, limit?=25)",
     },
     log_context_from_id: {
-      desc: "Trace context from a log ID (no trace_id needed)",
-      params: "(log_id, brief?=true)",
+      desc: "Trace context from a log ID; brief mode is capped by default",
+      params: "(log_id, brief?=true, limit?=25, window?=0)",
     },
     log_export: {
       desc: "Export matching logs as JSON or CSV",
@@ -204,7 +304,7 @@ export function buildServer(): McpServer {
     event_search: {
       desc: "Search raw-backed event_records across event types and identity dimensions",
       params:
-        "(event_type?, source?, severity?, project_id?, machine_id?, repo_id?, app_id?, process_id?, run_id?, trace_id?, session_id?, text?, limit?=100, include_raw?=false, include_internal?=false)",
+        "(event_type?, source?, severity?, project_id?, machine_id?, repo_id?, app_id?, process_id?, run_id?, trace_id?, session_id?, text?, limit?=25, brief?=true, include_raw?=false, include_internal?=false)",
     },
     event_get: {
       desc: "Get one event record and optionally reconstruct its raw segment envelope",
@@ -218,12 +318,12 @@ export function buildServer(): McpServer {
     event_watch: {
       desc: "Poll event_records after a cursor for MCP live-tail consumers",
       params:
-        "(last_event_id?, event_type?, source?, severity?, project_id?, trace_id?, run_id?, limit?=100, include_raw?=false, from_start?=false, include_internal?=false)",
+        "(last_event_id?, event_type?, source?, severity?, project_id?, trace_id?, run_id?, limit?=25, brief?=true, include_raw?=false, from_start?=false, include_internal?=false)",
     },
     test_report_search: {
       desc: "Search projected test_reports and optionally include bounded test_cases",
       params:
-        "(report_id?, event_id?, project_id?, run_id?, process_id?, parser?, parse_status?, case_status?, outcome?, min_failures?, min_errors?, text?, limit?=100, include_cases?=false)",
+        "(report_id?, event_id?, project_id?, run_id?, process_id?, parser?, parse_status?, case_status?, outcome?, min_failures?, min_errors?, text?, limit?=25, brief?=true, include_cases?=false)",
     },
     test_report_get: {
       desc: "Get one projected test report with bounded test case rows by default",
@@ -237,12 +337,21 @@ export function buildServer(): McpServer {
       desc: "Performance over time",
       params: "(project_id, page_id?, since?, limit?=50)",
     },
-    scan_status: { desc: "Last scan jobs", params: "(project_id?)" },
-    list_projects: { desc: "List all projects", params: "()" },
-    list_pages: { desc: "List pages for a project", params: "(project_id)" },
+    scan_status: {
+      desc: "Last scan jobs",
+      params: "(project_id?, limit?=25, brief?=true)",
+    },
+    list_projects: {
+      desc: "List all projects",
+      params: "(limit?=25, brief?=true)",
+    },
+    list_pages: {
+      desc: "List pages for a project",
+      params: "(project_id, limit?=25, brief?=true)",
+    },
     list_issues: {
       desc: "List grouped error issues",
-      params: "(project_id?, status?, limit?=50)",
+      params: "(project_id?, status?, limit?=25, brief?=true)",
     },
     resolve_issue: {
       desc: "Update issue status",
@@ -253,14 +362,23 @@ export function buildServer(): McpServer {
       params:
         "(project_id, name, level?, threshold_count?, window_seconds?, webhook_url?)",
     },
-    list_alert_rules: { desc: "List alert rules", params: "(project_id?)" },
+    list_alert_rules: {
+      desc: "List alert rules",
+      params: "(project_id?, limit?=25, brief?=true)",
+    },
     delete_alert_rule: { desc: "Delete alert rule", params: "(id)" },
-    get_health: { desc: "Server health + DB stats", params: "()" },
+    get_health: {
+      desc: "Server health + DB stats",
+      params: "(verbose?=false)",
+    },
     log_stats: {
       desc: "Aggregate DB-level log statistics for a project",
       params: "(project_id?)",
     },
-    storage_status: { desc: "Show storage sync configuration", params: "()" },
+    storage_status: {
+      desc: "Show storage sync configuration",
+      params: "(verbose?=false)",
+    },
     storage_push: {
       desc: "Push local logs data to storage PostgreSQL",
       params: "(tables?)",
@@ -508,6 +626,7 @@ export function buildServer(): McpServer {
         level: args.level ? (args.level.split(",") as LogLevel[]) : undefined,
         since: parseTime(args.since) ?? args.since,
         until: parseTime(args.until) ?? args.until,
+        limit: clampMcpListLimit(args.limit),
       });
       return {
         content: [
@@ -528,7 +647,7 @@ export function buildServer(): McpServer {
       brief: z.boolean().optional(),
     },
     ({ project_id, n, brief }) => {
-      const rows = tailLogs(db, rp(project_id), n ?? 50);
+      const rows = tailLogs(db, rp(project_id), clampMcpListLimit(n));
       return {
         content: [
           {
@@ -612,17 +731,23 @@ export function buildServer(): McpServer {
     {
       trace_id: z.string(),
       brief: z.boolean().optional(),
+      limit: z.number().optional(),
     },
-    ({ trace_id, brief }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            applyBrief(getLogContext(db, trace_id), brief !== false),
-          ),
-        },
-      ],
-    }),
+    ({ trace_id, brief, limit }) => {
+      const allRows = getLogContext(db, trace_id);
+      const rows = sliceMcpContextRows(
+        allRows,
+        resolveMcpContextLimit(limit, brief, allRows.length),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(applyBrief(rows, brief !== false)),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -630,6 +755,7 @@ export function buildServer(): McpServer {
     {
       log_id: z.string(),
       brief: z.boolean().optional(),
+      limit: z.number().optional(),
       window: z
         .number()
         .int()
@@ -639,19 +765,22 @@ export function buildServer(): McpServer {
           "Return N logs before and after the target log's timestamp (in addition to trace context)",
         ),
     },
-    ({ log_id, brief, window }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            applyBrief(
-              getLogContextFromId(db, log_id, window ?? 0),
-              brief !== false,
-            ),
-          ),
-        },
-      ],
-    }),
+    ({ log_id, brief, limit, window }) => {
+      const allRows = getLogContextFromId(db, log_id, window ?? 0);
+      const rows = sliceMcpContextRows(
+        allRows,
+        resolveMcpContextLimit(limit, brief, allRows.length),
+        log_id,
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(applyBrief(rows, brief !== false)),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -850,25 +979,30 @@ export function buildServer(): McpServer {
       limit: z.number().optional(),
       include_raw: z.boolean().optional(),
       include_internal: z.boolean().optional(),
+      brief: z.boolean().optional(),
     },
-    (args) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            searchEvents(db, {
-              ...args,
-              project_id: rp(args.project_id),
-              since: parseTime(args.since) ?? args.since,
-              until: parseTime(args.until) ?? args.until,
-              limit: args.limit ?? 100,
-              include_raw: args.include_raw === true,
-              exclude_mcp_tool_telemetry: args.include_internal !== true,
-            }),
-          ),
-        },
-      ],
-    }),
+    (args) => {
+      const wantsFullRows = args.brief === false || args.include_raw === true;
+      const rows = searchEvents(db, {
+        ...args,
+        project_id: rp(args.project_id),
+        since: parseTime(args.since) ?? args.since,
+        until: parseTime(args.until) ?? args.until,
+        limit: clampMcpListLimit(args.limit),
+        include_raw: args.include_raw === true,
+        exclude_mcp_tool_telemetry: args.include_internal !== true,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              wantsFullRows ? rows : rows.map(compactMcpEvent),
+            ),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -950,6 +1084,7 @@ export function buildServer(): McpServer {
       include_raw: z.boolean().optional(),
       from_start: z.boolean().optional(),
       include_internal: z.boolean().optional(),
+      brief: z.boolean().optional(),
     },
     (args) => ({
       content: [
@@ -959,10 +1094,11 @@ export function buildServer(): McpServer {
             watchEventsForMcp({
               ...args,
               project_id: rp(args.project_id),
-              limit: args.limit ?? 100,
+              limit: clampMcpListLimit(args.limit),
               include_raw: args.include_raw === true,
               from_start: args.from_start === true,
               include_internal: args.include_internal === true,
+              brief: args.brief,
             }),
           ),
         },
@@ -1005,24 +1141,30 @@ export function buildServer(): McpServer {
       text: z.string().optional(),
       limit: z.number().optional(),
       include_cases: z.boolean().optional(),
+      brief: z.boolean().optional(),
     },
-    (args) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            searchTestReports(db, {
-              ...args,
-              project_id: rp(args.project_id),
-              since: parseTime(args.since) ?? args.since,
-              until: parseTime(args.until) ?? args.until,
-              limit: args.limit ?? 100,
-              include_cases: args.include_cases === true,
-            }),
-          ),
-        },
-      ],
-    }),
+    (args) => {
+      const rows = searchTestReports(db, {
+        ...args,
+        project_id: rp(args.project_id),
+        since: parseTime(args.since) ?? args.since,
+        until: parseTime(args.until) ?? args.until,
+        limit: clampMcpListLimit(args.limit),
+        include_cases: args.include_cases === true,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              args.brief === false || args.include_cases === true
+                ? rows
+                : rows.map(compactMcpTestReport),
+            ),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -1094,26 +1236,94 @@ export function buildServer(): McpServer {
     "scan_status",
     {
       project_id: z.string().optional(),
+      limit: z.number().optional(),
+      brief: z.boolean().optional(),
     },
-    ({ project_id }) => ({
-      content: [
-        { type: "text", text: JSON.stringify(listJobs(db, rp(project_id))) },
-      ],
-    }),
+    ({ project_id, limit, brief }) => {
+      const rows = listJobs(db, rp(project_id)).slice(
+        0,
+        clampMcpListLimit(limit),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              brief === false
+                ? rows
+                : rows.map((job) => ({
+                    id: job.id,
+                    project_id: job.project_id,
+                    page_id: job.page_id,
+                    schedule: compactMcpText(job.schedule, 80),
+                    enabled: job.enabled,
+                    last_run_at: job.last_run_at,
+                  })),
+            ),
+          },
+        ],
+      };
+    },
   );
 
-  registerTool("list_projects", {}, () => ({
-    content: [{ type: "text", text: JSON.stringify(listProjects(db)) }],
-  }));
+  registerTool(
+    "list_projects",
+    { limit: z.number().optional(), brief: z.boolean().optional() },
+    ({ limit, brief }) => {
+      const rows = listProjects(db).slice(0, clampMcpListLimit(limit));
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              brief === false
+                ? rows
+                : rows.map((project) => ({
+                    id: project.id,
+                    name: compactMcpText(project.name, 80),
+                    base_url: compactMcpText(project.base_url, 100),
+                    github_repo: compactMcpText(project.github_repo, 100),
+                    created_at: project.created_at,
+                  })),
+            ),
+          },
+        ],
+      };
+    },
+  );
 
-  registerTool("list_pages", { project_id: z.string() }, ({ project_id }) => ({
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(listPages(db, rp(project_id) ?? project_id)),
-      },
-    ],
-  }));
+  registerTool(
+    "list_pages",
+    {
+      project_id: z.string(),
+      limit: z.number().optional(),
+      brief: z.boolean().optional(),
+    },
+    ({ project_id, limit, brief }) => {
+      const rows = listPages(db, rp(project_id) ?? project_id).slice(
+        0,
+        clampMcpListLimit(limit),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              brief === false
+                ? rows
+                : rows.map((page) => ({
+                    id: page.id,
+                    project_id: page.project_id,
+                    url: compactMcpText(page.url, 140),
+                    path: compactMcpText(page.path, 80),
+                    last_scanned_at: page.last_scanned_at,
+                  })),
+            ),
+          },
+        ],
+      };
+    },
+  );
 
   registerTool(
     "list_issues",
@@ -1121,17 +1331,37 @@ export function buildServer(): McpServer {
       project_id: z.string().optional(),
       status: z.string().optional(),
       limit: z.number().optional(),
+      brief: z.boolean().optional(),
     },
-    ({ project_id, status, limit }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            listIssues(db, rp(project_id), status, limit ?? 50),
-          ),
-        },
-      ],
-    }),
+    ({ project_id, status, limit, brief }) => {
+      const rows = listIssues(
+        db,
+        rp(project_id),
+        status,
+        clampMcpListLimit(limit),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              brief === false
+                ? rows
+                : rows.map((issue) => ({
+                    id: issue.id,
+                    project_id: issue.project_id,
+                    status: issue.status,
+                    level: issue.level,
+                    service: compactMcpText(issue.service, 48),
+                    message_template: compactMcpText(issue.message_template),
+                    count: issue.count,
+                    last_seen: issue.last_seen,
+                  })),
+            ),
+          },
+        ],
+      };
+    },
   );
 
   registerTool(
@@ -1181,15 +1411,38 @@ export function buildServer(): McpServer {
     "list_alert_rules",
     {
       project_id: z.string().optional(),
+      limit: z.number().optional(),
+      brief: z.boolean().optional(),
     },
-    ({ project_id }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(listAlertRules(db, rp(project_id))),
-        },
-      ],
-    }),
+    ({ project_id, limit, brief }) => {
+      const rows = listAlertRules(db, rp(project_id)).slice(
+        0,
+        clampMcpListLimit(limit),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              brief === false
+                ? rows
+                : rows.map((rule) =>
+                    compactObjectFields(rule as Record<string, unknown>, [
+                      "id",
+                      "project_id",
+                      "name",
+                      "level",
+                      "service",
+                      "threshold_count",
+                      "window_seconds",
+                      "enabled",
+                    ]),
+                  ),
+            ),
+          },
+        ],
+      };
+    },
   );
 
   registerTool("delete_alert_rule", { id: z.string() }, ({ id }) => {
@@ -1197,9 +1450,32 @@ export function buildServer(): McpServer {
     return { content: [{ type: "text", text: "deleted" }] };
   });
 
-  registerTool("get_health", {}, () => ({
-    content: [{ type: "text", text: JSON.stringify(getHealth(db)) }],
-  }));
+  registerTool(
+    "get_health",
+    { verbose: z.boolean().optional() },
+    ({ verbose }) => {
+      const health = getHealth(db);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              verbose === true
+                ? health
+                : {
+                    status: health.status,
+                    total_logs: health.total_logs,
+                    projects: health.projects,
+                    scheduler_jobs: health.scheduler_jobs,
+                    open_issues: health.open_issues,
+                    newest_log: health.newest_log,
+                  },
+            ),
+          },
+        ],
+      };
+    },
+  );
 
   registerTool(
     "log_stats",
@@ -1322,6 +1598,7 @@ export function buildServer(): McpServer {
     include_raw?: boolean;
     from_start?: boolean;
     include_internal?: boolean;
+    brief?: boolean;
   }
 
   interface McpEventCursor {
@@ -1371,7 +1648,15 @@ export function buildServer(): McpServer {
     const last = visibleRows.at(-1);
     if (last) cursor = last.event_id;
 
-    return { events, cursor, has_more: rows.length > limit, overflow };
+    return {
+      events:
+        args.brief === false || args.include_raw === true
+          ? events
+          : events.map((event) => compactMcpEvent(event)),
+      cursor,
+      has_more: rows.length > limit,
+      overflow,
+    };
   }
 
   function latestMcpEventCursor(
@@ -1758,13 +2043,26 @@ export function buildServer(): McpServer {
   registerTrackedTool(
     "list_agents",
     "List all registered agents.",
-    {},
-    async () => {
+    { limit: z.number().optional(), brief: z.boolean().optional() },
+    async ({ limit, brief }) => {
+      const agents = [..._logsAgents.values()].slice(
+        0,
+        clampMcpListLimit(limit),
+      );
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify([..._logsAgents.values()]),
+            text: JSON.stringify(
+              brief === false
+                ? agents
+                : agents.map((agent) => ({
+                    id: agent.id,
+                    name: compactMcpText(agent.name, 80),
+                    project_id: agent.project_id ?? null,
+                    last_seen_at: agent.last_seen_at,
+                  })),
+            ),
           },
         ],
       };
@@ -1774,12 +2072,27 @@ export function buildServer(): McpServer {
   registerTrackedTool(
     "storage_status",
     "Check configured logs PostgreSQL remote storage.",
-    {},
-    async () => {
+    { verbose: z.boolean().optional() },
+    async ({ verbose }) => {
       const status = getStorageStatus();
       if (!status.configured)
         return {
-          content: [{ type: "text" as const, text: JSON.stringify(status) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                verbose === true
+                  ? status
+                  : {
+                      configured: status.configured,
+                      mode: status.mode,
+                      service: status.service,
+                      table_count: status.tables.length,
+                      activeEnv: status.activeEnv,
+                    },
+              ),
+            },
+          ],
         };
       let storage: Awaited<ReturnType<typeof getStoragePg>> | null = null;
       try {
@@ -1792,11 +2105,23 @@ export function buildServer(): McpServer {
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify({
-                ...status,
-                connected: true,
-                remoteTables: remoteTables.map((row) => row.tablename),
-              }),
+              text: JSON.stringify(
+                verbose === true
+                  ? {
+                      ...status,
+                      connected: true,
+                      remoteTables: remoteTables.map((row) => row.tablename),
+                    }
+                  : {
+                      configured: status.configured,
+                      mode: status.mode,
+                      service: status.service,
+                      activeEnv: status.activeEnv,
+                      table_count: status.tables.length,
+                      connected: true,
+                      remote_table_count: remoteTables.length,
+                    },
+              ),
             },
           ],
         };

@@ -69,6 +69,11 @@ const LEVEL_COLOR: Record<string, string> = {
   info: "",
   debug: C.gray,
 };
+const DEFAULT_HUMAN_LIMIT = 25;
+const DEFAULT_JSON_LIMIT = 100;
+const MAX_HUMAN_FIELD = 96;
+const MAX_MESSAGE_FIELD = 140;
+
 function colorRow(ts: string, level: string, svc: string, msg: string): string {
   const lc = LEVEL_COLOR[level.toLowerCase()] ?? "";
   const isTTY = process.stdout.isTTY;
@@ -110,6 +115,78 @@ function parseStorageTables(value?: string): string[] | undefined {
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
+}
+
+function compactText(
+  value: string | null | undefined,
+  max = MAX_HUMAN_FIELD,
+): string {
+  if (!value) return "-";
+  const singleLine = value.replace(/\s+/g, " ").trim();
+  if (singleLine.length <= max) return singleLine;
+  return `${singleLine.slice(0, Math.max(0, max - 3))}...`;
+}
+
+function compactId(value: string | null | undefined, max = 16): string {
+  if (!value) return "-";
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1)}...`;
+}
+
+function compactTimestamp(value: string | null | undefined): string {
+  return value ? value.slice(0, 19) : "-";
+}
+
+function parseListLimit(
+  value: string | undefined,
+  label: string,
+  fallback = DEFAULT_HUMAN_LIMIT,
+): number {
+  return parsePositiveIntOption(value, label, fallback);
+}
+
+function parseListOffset(value: string | undefined): number {
+  return parseOptionalNonNegativeInt(value, "--offset") ?? 0;
+}
+
+function splitVisibleRows<T>(
+  rows: T[],
+  limit: number,
+): { rows: T[]; hasMore: boolean } {
+  return {
+    rows: rows.slice(0, limit),
+    hasMore: rows.length > limit,
+  };
+}
+
+function printCompactFooter(opts: {
+  command: string;
+  count: number;
+  noun: string;
+  limit: number;
+  offset?: number;
+  hasMore?: boolean;
+  detailHint?: string;
+}): void {
+  const offset = opts.offset ?? 0;
+  const range =
+    offset > 0
+      ? `offset ${offset}, showing ${opts.count}`
+      : `showing ${opts.count}`;
+  console.log(`\n${range} ${opts.noun}(s).`);
+  if (opts.hasMore) {
+    console.log(
+      `More results available. Use ${opts.command} --limit ${opts.limit} --offset ${offset + opts.limit} for the next page.`,
+    );
+  }
+  if (opts.detailHint) console.log(opts.detailHint);
+}
+
+function tableFormat(opts: {
+  format?: string;
+  json?: boolean;
+}): string {
+  return opts.json ? "json" : (opts.format ?? "table");
 }
 
 function parseJsonObjectOption(
@@ -207,12 +284,23 @@ program
     "Until timestamp or relative (e.g. logs list --since 2h --until 1h)",
   )
   .option("--text <query>", "Full-text search")
-  .option("--limit <n>", "Max results", "100")
+  .option("--limit <n>", "Max results (default: 25 for table, 100 for JSON)")
+  .option("--offset <n>", "Skip this many results for pagination")
+  .option("--verbose", "Show full messages and metadata in table output")
+  .option("--json", "Alias for --format json")
   .option("--format <fmt>", "Output format: table|json|compact", "table")
   .action((opts) => {
     const db = getDb();
     const since = parseRelativeTime(opts.since);
     const until = parseRelativeTime(opts.until);
+    const format = tableFormat(opts);
+    const isJson = format === "json";
+    const limit = parseListLimit(
+      opts.limit,
+      "--limit",
+      isJson ? DEFAULT_JSON_LIMIT : DEFAULT_HUMAN_LIMIT,
+    );
+    const offset = parseListOffset(opts.offset);
     const rows = searchLogs(db, {
       project_id: resolveProject(opts.project),
       page_id: opts.page,
@@ -221,26 +309,41 @@ program
       since,
       until,
       text: opts.text,
-      limit: Number(opts.limit),
+      limit: isJson ? limit : limit + 1,
+      offset,
     });
-    if (opts.format === "json") {
-      console.log(JSON.stringify(rows, null, 2));
+    if (isJson) {
+      printJson(rows);
       return;
     }
-    if (opts.format === "compact") {
-      for (const r of rows)
+    const visible = splitVisibleRows(rows, limit);
+    if (format === "compact") {
+      for (const r of visible.rows)
         console.log(
-          `${r.timestamp} [${r.level.toUpperCase()}] ${r.service ?? "-"} ${r.message}`,
+          `${compactTimestamp(r.timestamp)} [${r.level.toUpperCase()}] ${compactText(r.service, 18)} ${compactText(r.message, MAX_MESSAGE_FIELD)}`,
         );
       return;
     }
-    for (const r of rows) {
-      const meta = r.metadata ? ` ${r.metadata}` : "";
+    for (const r of visible.rows) {
+      const message = opts.verbose
+        ? r.message
+        : compactText(r.message, MAX_MESSAGE_FIELD);
+      const service = compactText(r.service, 18);
+      const meta = opts.verbose && r.metadata ? ` metadata=${r.metadata}` : "";
       console.log(
-        `${colorRow(r.timestamp, r.level, r.service ?? "-", r.message)}${meta}`,
+        `${colorRow(compactTimestamp(r.timestamp), r.level, service, message)}  id=${compactId(r.id)}${r.trace_id ? ` trace=${compactId(r.trace_id)}` : ""}${meta}`,
       );
     }
-    console.log(`\n${rows.length} log(s)`);
+    printCompactFooter({
+      command: "logs list",
+      count: visible.rows.length,
+      noun: "log",
+      limit,
+      offset,
+      hasMore: visible.hasMore,
+      detailHint:
+        "Use --verbose for full messages/metadata or --json for full records.",
+    });
   });
 
 // ── logs tail ──────────────────────────────────────────────
@@ -248,15 +351,31 @@ program
   .command("tail")
   .description("Show most recent logs")
   .option("--project <name|id>", "Project name or ID")
-  .option("--n <count>", "Number of logs", "50")
+  .option("--n <count>", "Number of logs", String(DEFAULT_HUMAN_LIMIT))
+  .option("--verbose", "Show full messages in table output")
+  .option("--json", "Output full records as JSON")
   .action((opts) => {
-    const rows = tailLogs(
-      getDb(),
-      resolveProject(opts.project),
-      Number(opts.n),
-    );
-    for (const r of rows)
-      console.log(colorRow(r.timestamp, r.level, r.service ?? "-", r.message));
+    const limit = parseListLimit(opts.n, "--n", DEFAULT_HUMAN_LIMIT);
+    const rows = tailLogs(getDb(), resolveProject(opts.project), limit);
+    if (opts.json) {
+      printJson(rows);
+      return;
+    }
+    for (const r of rows) {
+      const message = opts.verbose
+        ? r.message
+        : compactText(r.message, MAX_MESSAGE_FIELD);
+      console.log(
+        `${colorRow(compactTimestamp(r.timestamp), r.level, compactText(r.service, 18), message)}  id=${compactId(r.id)}`,
+      );
+    }
+    printCompactFooter({
+      command: "logs tail",
+      count: rows.length,
+      noun: "log",
+      limit,
+      detailHint: "Use --verbose for full messages or --json for full records.",
+    });
   });
 
 // ── logs summary ──────────────────────────────────────────
@@ -457,6 +576,7 @@ const storageCmd = program
 storageCmd
   .command("status")
   .description("Show storage sync configuration")
+  .option("--verbose", "Show the full table list")
   .option("--json", "Output as JSON")
   .action((opts) => {
     const info = getStorageStatus();
@@ -466,7 +586,13 @@ storageCmd
     }
     console.log(`Storage configured: ${info.configured ? "yes" : "no"}`);
     console.log(`Mode: ${info.mode}`);
-    console.log(`Tables: ${info.tables.join(", ")}`);
+    if (opts.verbose) {
+      console.log(`Tables (${info.tables.length}): ${info.tables.join(", ")}`);
+    } else {
+      console.log(
+        `Tables: ${info.tables.length} service-owned table(s). Use --verbose to list names.`,
+      );
+    }
   });
 
 storageCmd
@@ -747,9 +873,20 @@ eventsCmd
     "Substring search over event id, source id, message, and metadata",
   )
   .option("--include-raw", "Include raw segment envelope")
-  .option("--limit <n>", "Max results", "100")
+  .option("--limit <n>", "Max results (default: 25 for table, 100 for JSON)")
+  .option("--offset <n>", "Skip this many results for pagination")
+  .option("--verbose", "Show wider event fields in table output")
+  .option("--json", "Alias for --format json")
   .option("--format <fmt>", "Output format: table|json", "table")
   .action((opts) => {
+    const format = tableFormat(opts);
+    const isJson = format === "json";
+    const limit = parseListLimit(
+      opts.limit,
+      "--limit",
+      isJson ? DEFAULT_JSON_LIMIT : DEFAULT_HUMAN_LIMIT,
+    );
+    const offset = parseListOffset(opts.offset);
     const rows = searchEvents(getDb(), {
       event_type: opts.type,
       source: opts.source,
@@ -766,19 +903,36 @@ eventsCmd
       since: parseRelativeTime(opts.since),
       until: parseRelativeTime(opts.until),
       text: opts.text,
-      include_raw: Boolean(opts.includeRaw),
-      limit: Number(opts.limit),
+      include_raw: Boolean(opts.includeRaw) && isJson,
+      limit: isJson ? limit : limit + 1,
+      offset,
     });
-    if (opts.format === "json") {
+    if (isJson) {
       printJson(rows);
       return;
     }
-    for (const row of rows) {
+    const visible = splitVisibleRows(rows, limit);
+    for (const row of visible.rows) {
+      const message = opts.verbose
+        ? (row.message ?? "")
+        : compactText(row.message, MAX_MESSAGE_FIELD);
       console.log(
-        `${row.event_time}  ${pad(row.event_type, 10)} ${pad(row.source, 8)} ${pad(row.severity ?? "-", 5)} ${row.event_id}  ${row.message ?? ""}`,
+        `${compactTimestamp(row.event_time)}  ${pad(compactText(row.event_type, 10), 10)} ${pad(compactText(row.source, 10), 10)} ${pad(row.severity ?? "-", 5)} ${row.event_id}  ${message}`,
       );
     }
-    console.log(`\n${rows.length} event(s)`);
+    printCompactFooter({
+      command: "logs events list",
+      count: visible.rows.length,
+      noun: "event",
+      limit,
+      offset,
+      hasMore: visible.hasMore,
+      detailHint:
+        "Use events get <event_id> for one record, --verbose for wider rows, or --json for full records.",
+    });
+    if (opts.includeRaw) {
+      console.log("Raw envelopes are available with --include-raw --json.");
+    }
   });
 
 eventsCmd
@@ -873,9 +1027,20 @@ testReportsCmd
   .option("--until <time>", "Until timestamp or relative")
   .option("--text <query>", "Substring search over report and case metadata")
   .option("--include-cases", "Include bounded case rows")
-  .option("--limit <n>", "Max results", "100")
+  .option("--limit <n>", "Max results (default: 25 for table, 100 for JSON)")
+  .option("--offset <n>", "Skip this many results for pagination")
+  .option("--verbose", "Show wider report fields in table output")
+  .option("--json", "Alias for --format json")
   .option("--format <fmt>", "Output format: table|json", "table")
   .action((opts) => {
+    const format = tableFormat(opts);
+    const isJson = format === "json";
+    const limit = parseListLimit(
+      opts.limit,
+      "--limit",
+      isJson ? DEFAULT_JSON_LIMIT : DEFAULT_HUMAN_LIMIT,
+    );
+    const offset = parseListOffset(opts.offset);
     const rows = searchTestReports(getDb(), {
       report_id: opts.report,
       event_id: opts.event,
@@ -898,20 +1063,36 @@ testReportsCmd
       since: parseRelativeTime(opts.since),
       until: parseRelativeTime(opts.until),
       text: opts.text,
-      include_cases: Boolean(opts.includeCases),
-      limit: Number(opts.limit),
+      include_cases: Boolean(opts.includeCases) && isJson,
+      limit: isJson ? limit : limit + 1,
+      offset,
     });
-    if (opts.format === "json") {
+    if (isJson) {
       printJson(rows);
       return;
     }
-    for (const report of rows) {
+    const visible = splitVisibleRows(rows, limit);
+    for (const report of visible.rows) {
       const counts = `${report.tests ?? "-"} tests/${report.failures ?? "-"} failures/${report.errors ?? "-"} errors`;
       console.log(
-        `${report.event_time ?? "-"}  ${pad(report.parse_status ?? "-", 10)} ${pad(report.parser ?? "-", 14)} ${pad(counts, 30)} ${report.id}  ${report.path ?? ""}`,
+        `${compactTimestamp(report.event_time)}  ${pad(compactText(report.parse_status, 10), 10)} ${pad(compactText(report.parser, 14), 14)} ${pad(counts, 30)} ${report.id}  ${compactText(report.path, opts.verbose ? 160 : 80)}`,
       );
     }
-    console.log(`\n${rows.length} test report(s)`);
+    printCompactFooter({
+      command: "logs test-reports list",
+      count: visible.rows.length,
+      noun: "test report",
+      limit,
+      offset,
+      hasMore: visible.hasMore,
+      detailHint:
+        "Use test-reports get <report_id> for cases/details, --verbose for wider rows, or --json for full records.",
+    });
+    if (opts.includeCases) {
+      console.log(
+        "Case rows are included only with --include-cases --json or test-reports get.",
+      );
+    }
   });
 
 testReportsCmd
@@ -949,13 +1130,36 @@ projectCmd
     console.log(`Created project: ${p.id} — ${p.name}`);
   });
 
-projectCmd.command("list").action(() => {
-  const projects = listProjects(getDb());
-  for (const p of projects)
-    console.log(
-      `${p.id}  ${p.name}  ${p.base_url ?? ""}  ${p.github_repo ?? ""}`,
-    );
-});
+projectCmd
+  .command("list")
+  .option("--limit <n>", "Max results", String(DEFAULT_HUMAN_LIMIT))
+  .option("--offset <n>", "Skip this many results for pagination")
+  .option("--verbose", "Show full URLs and repository fields")
+  .option("--json", "Output full records as JSON")
+  .action((opts) => {
+    const limit = parseListLimit(opts.limit, "--limit", DEFAULT_HUMAN_LIMIT);
+    const offset = parseListOffset(opts.offset);
+    const projects = listProjects(getDb());
+    const page = projects.slice(offset, offset + limit + 1);
+    if (opts.json) {
+      printJson(projects.slice(offset, offset + limit));
+      return;
+    }
+    const visible = splitVisibleRows(page, limit);
+    for (const p of visible.rows)
+      console.log(
+        `${compactId(p.id)}  ${compactText(p.name, 28)}  ${compactText(p.base_url, opts.verbose ? 120 : 40)}  ${compactText(p.github_repo, opts.verbose ? 120 : 40)}`,
+      );
+    printCompactFooter({
+      command: "logs project list",
+      count: visible.rows.length,
+      noun: "project",
+      limit,
+      offset,
+      hasMore: visible.hasMore,
+      detailHint: "Use --verbose for wider fields or --json for full records.",
+    });
+  });
 
 // ── logs page ─────────────────────────────────────────────
 const pageCmd = program.command("page").description("Manage pages");
@@ -986,6 +1190,10 @@ pageCmd
 pageCmd
   .command("list")
   .option("--project <name|id>", "Project name or ID")
+  .option("--limit <n>", "Max results", String(DEFAULT_HUMAN_LIMIT))
+  .option("--offset <n>", "Skip this many results for pagination")
+  .option("--verbose", "Show full URLs")
+  .option("--json", "Output full records as JSON")
   .action((opts) => {
     if (!opts.project) {
       console.error("--project required");
@@ -996,9 +1204,28 @@ pageCmd
       console.error("Project not found");
       process.exit(1);
     }
+    const limit = parseListLimit(opts.limit, "--limit", DEFAULT_HUMAN_LIMIT);
+    const offset = parseListOffset(opts.offset);
     const pages = listPages(getDb(), projectId);
-    for (const p of pages)
-      console.log(`${p.id}  ${p.url}  last=${p.last_scanned_at ?? "never"}`);
+    const page = pages.slice(offset, offset + limit + 1);
+    if (opts.json) {
+      printJson(pages.slice(offset, offset + limit));
+      return;
+    }
+    const visible = splitVisibleRows(page, limit);
+    for (const p of visible.rows)
+      console.log(
+        `${compactId(p.id)}  ${compactText(p.url, opts.verbose ? 160 : 80)}  last=${compactTimestamp(p.last_scanned_at)}`,
+      );
+    printCompactFooter({
+      command: "logs page list",
+      count: visible.rows.length,
+      noun: "page",
+      limit,
+      offset,
+      hasMore: visible.hasMore,
+      detailHint: "Use --verbose for full URLs or --json for full records.",
+    });
   });
 
 // ── logs job ──────────────────────────────────────────────
@@ -1028,12 +1255,32 @@ jobCmd
 jobCmd
   .command("list")
   .option("--project <name|id>", "Project name or ID")
+  .option("--limit <n>", "Max results", String(DEFAULT_HUMAN_LIMIT))
+  .option("--offset <n>", "Skip this many results for pagination")
+  .option("--json", "Output full records as JSON")
   .action((opts) => {
+    const limit = parseListLimit(opts.limit, "--limit", DEFAULT_HUMAN_LIMIT);
+    const offset = parseListOffset(opts.offset);
     const jobs = listJobs(getDb(), resolveProject(opts.project));
-    for (const j of jobs)
+    const page = jobs.slice(offset, offset + limit + 1);
+    if (opts.json) {
+      printJson(jobs.slice(offset, offset + limit));
+      return;
+    }
+    const visible = splitVisibleRows(page, limit);
+    for (const j of visible.rows)
       console.log(
-        `${j.id}  ${j.schedule}  enabled=${j.enabled}  last=${j.last_run_at ?? "never"}`,
+        `${compactId(j.id)}  ${compactText(j.schedule, 24)}  enabled=${j.enabled}  last=${compactTimestamp(j.last_run_at)}`,
       );
+    printCompactFooter({
+      command: "logs job list",
+      count: visible.rows.length,
+      noun: "job",
+      limit,
+      offset,
+      hasMore: visible.hasMore,
+      detailHint: "Use --json for full records.",
+    });
   });
 
 // ── logs scan ─────────────────────────────────────────────
@@ -1068,6 +1315,8 @@ program
     "--include <items>",
     "Comma-separated: top_errors,error_rate,failing_pages,perf",
   )
+  .option("--verbose", "Show wider messages and URLs")
+  .option("--json", "Output full diagnosis as JSON")
   .action(async (opts) => {
     const { diagnose } = await import("../lib/diagnose.ts");
     const projectId = resolveProject(opts.project);
@@ -1077,6 +1326,10 @@ program
     }
     const include = opts.include ? opts.include.split(",") : undefined;
     const result = diagnose(getDb(), projectId, opts.since, include);
+    if (opts.json) {
+      printJson(result);
+      return;
+    }
     const scoreColor =
       result.score === "green"
         ? "\x1b[32m"
@@ -1090,7 +1343,7 @@ program
       console.log(`\n${C.bold}Top Errors:${C.reset}`);
       for (const e of result.top_errors) {
         console.log(
-          `  ${C.red}${pad(String(e.count), 5)}x${C.reset}  ${C.cyan}${pad(e.service ?? "-", 12)}${C.reset}  ${e.message}`,
+          `  ${C.red}${pad(String(e.count), 5)}x${C.reset}  ${C.cyan}${pad(compactText(e.service, 12), 12)}${C.reset}  ${opts.verbose ? e.message : compactText(e.message, MAX_MESSAGE_FIELD)}`,
         );
       }
     }
@@ -1108,18 +1361,23 @@ program
       console.log(`\n${C.bold}Failing Pages:${C.reset}`);
       for (const p of result.failing_pages)
         console.log(
-          `  ${C.red}✗${C.reset}  ${p.url}  (${p.error_count} errors)`,
+          `  ${C.red}✗${C.reset}  ${compactText(p.url, opts.verbose ? 160 : 88)}  (${p.error_count} errors)`,
         );
     }
     if (result.perf_regressions?.length) {
       console.log(`\n${C.bold}Perf Regressions:${C.reset}`);
       for (const r of result.perf_regressions)
         console.log(
-          `  ${C.yellow}⚠${C.reset}  ${r.url}  score=${r.score_now ?? "-"} delta=${r.delta ?? "-"}`,
+          `  ${C.yellow}⚠${C.reset}  ${compactText(r.url, opts.verbose ? 160 : 88)}  score=${r.score_now ?? "-"} delta=${r.delta ?? "-"}`,
         );
     }
-    console.log(`\n${result.summary}`);
+    console.log(
+      `\n${opts.verbose ? result.summary : compactText(result.summary, 220)}`,
+    );
     console.log("");
+    console.log(
+      "Use --verbose for wider rows or --json for the full diagnosis object.",
+    );
   });
 
 // ── logs watch ────────────────────────────────────────────
@@ -1446,10 +1704,29 @@ program
 program
   .command("health")
   .description("Show server health and DB stats")
-  .action(async () => {
+  .option("--json", "Output full health object as JSON")
+  .option("--verbose", "Show level breakdown")
+  .action(async (opts) => {
     const { getHealth } = await import("../lib/health.ts");
     const h = getHealth(getDb());
-    console.log(JSON.stringify(h, null, 2));
+    if (opts.json) {
+      printJson(h);
+      return;
+    }
+    console.log(
+      `Health: ${h.status}  logs=${h.total_logs.toLocaleString()}  projects=${h.projects}  jobs=${h.scheduler_jobs}  open_issues=${h.open_issues}`,
+    );
+    console.log(
+      `Window: oldest=${compactTimestamp(h.oldest_log)} newest=${compactTimestamp(h.newest_log)} uptime=${h.uptime_seconds}s`,
+    );
+    if (opts.verbose) {
+      console.log(`By level: ${JSON.stringify(h.logs_by_level)}`);
+      console.log(`DB size: ${h.db_size_bytes ?? "-"} bytes`);
+    } else {
+      console.log(
+        "Use --verbose for level breakdown or --json for the full health object.",
+      );
+    }
   });
 
 // ── logs mcp / logs serve ─────────────────────────────────
