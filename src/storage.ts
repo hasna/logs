@@ -24,5 +24,5 @@ export type {
   StorageMode,
   StorageStatus,
 } from "./lib/storage-sync.ts";
-export { PgAdapterAsync } from "./lib/remote-storage.ts";
+export { LogsPostgresStorage, PgAdapterAsync } from "./lib/remote-storage.ts";
 export { PG_MIGRATIONS } from "./db/pg-migrations.ts";

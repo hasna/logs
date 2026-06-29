@@ -484,7 +484,9 @@ function findClosingQuote(
 function readQuoteBefore(input: string, index: number): QuoteToken | null {
   const escapedQuote = input.slice(index - 2, index);
   if (escapedQuote === '\\"' || escapedQuote === "\\'") {
-    return { quote: escapedQuote[1], escaped: true, length: 2 };
+    const quote = escapedQuote[1];
+    if (!quote) return null;
+    return { quote, escaped: true, length: 2 };
   }
   const quote = input[index - 1];
   return quote === '"' || quote === "'"
@@ -495,7 +497,9 @@ function readQuoteBefore(input: string, index: number): QuoteToken | null {
 function readQuoteAt(input: string, index: number): QuoteToken | null {
   const escapedQuote = input.slice(index, index + 2);
   if (escapedQuote === '\\"' || escapedQuote === "\\'") {
-    return { quote: escapedQuote[1], escaped: true, length: 2 };
+    const quote = escapedQuote[1];
+    if (!quote) return null;
+    return { quote, escaped: true, length: 2 };
   }
   const quote = input[index];
   return quote === '"' || quote === "'"
@@ -551,6 +555,7 @@ function applyReplacementRanges(
   let replacements = 0;
   for (let index = deduped.length - 1; index >= 0; index -= 1) {
     const range = deduped[index];
+    if (!range) continue;
     if (value.slice(range.start, range.end) === REDACTED) continue;
     value = `${value.slice(0, range.start)}${REDACTED}${value.slice(range.end)}`;
     replacements += 1;

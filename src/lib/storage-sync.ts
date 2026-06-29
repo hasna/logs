@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { getDb } from "../db/index.ts";
 import { PG_MIGRATIONS } from "../db/pg-migrations.ts";
-import { PgAdapterAsync } from "./remote-storage.ts";
+import { LogsPostgresStorage } from "./remote-storage.ts";
 
 export const STORAGE_TABLES = [
   "projects",
@@ -111,14 +111,14 @@ export function getStorageMode(): StorageMode {
   return getStorageDatabaseUrl() ? "hybrid" : "local";
 }
 
-export async function getStoragePg(): Promise<PgAdapterAsync> {
+export async function getStoragePg(): Promise<LogsPostgresStorage> {
   const url = getStorageDatabaseUrl();
   if (!url) throw new Error("Missing HASNA_LOGS_DATABASE_URL");
-  return new PgAdapterAsync(url);
+  return new LogsPostgresStorage(url);
 }
 
 export async function runStorageMigrations(
-  remote: PgAdapterAsync,
+  remote: LogsPostgresStorage,
 ): Promise<void> {
   for (const sql of PG_MIGRATIONS) await remote.run(sql);
 }
@@ -192,7 +192,7 @@ function quoteIdent(identifier: string): string {
 
 async function pushTable(
   db: Database,
-  remote: PgAdapterAsync,
+  remote: LogsPostgresStorage,
   table: string,
 ): Promise<number> {
   const rows = db.query(`SELECT * FROM ${quoteIdent(table)}`).all() as Row[];
@@ -209,7 +209,7 @@ async function pushTable(
 }
 
 async function pullTable(
-  remote: PgAdapterAsync,
+  remote: LogsPostgresStorage,
   db: Database,
   table: string,
 ): Promise<number> {
@@ -225,7 +225,7 @@ async function pullTable(
 }
 
 async function filterRemoteColumns(
-  remote: PgAdapterAsync,
+  remote: LogsPostgresStorage,
   table: string,
   columns: string[],
 ): Promise<string[]> {
@@ -255,7 +255,7 @@ function filterLocalColumns(
 }
 
 async function upsertPg(
-  remote: PgAdapterAsync,
+  remote: LogsPostgresStorage,
   table: string,
   columns: string[],
   rows: Row[],

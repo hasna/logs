@@ -238,7 +238,7 @@ describe("redaction", () => {
     expect(JSON.stringify(result.value)).not.toContain(cookieSecret);
     expect(JSON.stringify(result.value)).not.toContain(setCookieSecret);
     expect(JSON.stringify(result.value)).not.toContain(apiKeySecret);
-    expect(result.value).toEqual({
+    expect(result.value as unknown).toEqual({
       headers: [
         { name: "Cookie", value: REDACTED },
         { key: "set-cookie", value: REDACTED },

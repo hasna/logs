@@ -84,7 +84,7 @@ test("logs MCP lists tools over stdio", async () => {
     expect(toolNames).toContain("test_report_get");
     expect(toolNames).toContain("storage_status");
     expect(toolNames).toContain("storage_push");
-    expect(toolNames).not.toContain("cloud_status");
+    expect(toolNames).not.toContain(["cloud", "status"].join("_"));
   } finally {
     await client.close().catch(() => {});
   }

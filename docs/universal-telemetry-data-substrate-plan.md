@@ -122,7 +122,7 @@ Blocking gaps:
 - Do not make summaries, automated root cause analysis, or "autofix" the source of value.
 - Do not treat Sentry feature parity as the main roadmap.
 - Do not store all raw telemetry in SQLite.
-- Do not depend on cloud sync for local usefulness.
+- Do not depend on remote sync for local usefulness.
 - Do not capture sensitive data casually; broad capture requires stricter redaction and opt-in policies.
 
 ## Core Architecture

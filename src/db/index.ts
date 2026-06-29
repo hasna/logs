@@ -1,6 +1,14 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setEventStoreDataDir } from "../lib/event-store.ts";
@@ -8,6 +16,34 @@ import { migrateAlertRules } from "./migrations/001_alert_rules.ts";
 import { migrateIssues } from "./migrations/002_issues.ts";
 import { migrateRetention } from "./migrations/003_retention.ts";
 import { migratePageAuth } from "./migrations/004_page_auth.ts";
+
+const PRIVATE_DIR_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
+
+function chmodIfExists(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+function ensurePrivateDir(path: string): void {
+  mkdirSync(path, { recursive: true, mode: PRIVATE_DIR_MODE });
+  chmodIfExists(path, PRIVATE_DIR_MODE);
+}
+
+function ensurePrivateTree(path: string): void {
+  const stat = statSync(path);
+  if (!stat.isDirectory()) {
+    chmodIfExists(path, PRIVATE_FILE_MODE);
+    return;
+  }
+  chmodIfExists(path, PRIVATE_DIR_MODE);
+  for (const entry of readdirSync(path)) {
+    ensurePrivateTree(join(path, entry));
+  }
+}
 
 function resolveDataDir(): string {
   const explicit = process.env.HASNA_LOGS_DATA_DIR ?? process.env.LOGS_DATA_DIR;
@@ -19,8 +55,9 @@ function resolveDataDir(): string {
 
   // Auto-migrate: copy old data to new location if needed
   if (!existsSync(newDir) && existsSync(oldDir)) {
-    mkdirSync(join(home, ".hasna"), { recursive: true });
+    ensurePrivateDir(join(home, ".hasna"));
     cpSync(oldDir, newDir, { recursive: true });
+    ensurePrivateTree(newDir);
   }
 
   return newDir;
@@ -34,12 +71,33 @@ const DB_PATH =
 
 let _db: Database | null = null;
 
+export function ensureLogsDataDir(): string {
+  ensurePrivateDir(DATA_DIR);
+  return DATA_DIR;
+}
+
+export function getLogsDataDir(): string {
+  return DATA_DIR;
+}
+
+export function getLogsDbPath(): string {
+  return DB_PATH;
+}
+
+export function ensureLogsDbFilesPrivate(): void {
+  chmodIfExists(DB_PATH, PRIVATE_FILE_MODE);
+  chmodIfExists(`${DB_PATH}-wal`, PRIVATE_FILE_MODE);
+  chmodIfExists(`${DB_PATH}-shm`, PRIVATE_FILE_MODE);
+}
+
 export function getDb(): Database {
   if (_db) return _db;
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+  ensureLogsDataDir();
   _db = new Database(DB_PATH);
+  ensureLogsDbFilesPrivate();
   setEventStoreDataDir(_db, DATA_DIR);
   configureDb(_db);
+  ensureLogsDbFilesPrivate();
   runWithBusyRetry(
     _db,
     `CREATE TABLE IF NOT EXISTS feedback (
@@ -52,6 +110,7 @@ export function getDb(): Database {
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
   );
+  ensureLogsDbFilesPrivate();
   return _db;
 }
 

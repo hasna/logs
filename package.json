@@ -1,6 +1,6 @@
 {
   "name": "@hasna/logs",
-  "version": "0.3.33",
+  "version": "0.3.34",
   "description": "Log aggregation + browser script + headless page scanner + performance monitoring for AI agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -11,6 +11,7 @@
       "types": "./dist/index.d.ts"
     },
     "./storage": {
+      "types": "./dist/storage.d.ts",
       "import": "./dist/storage.js"
     }
   },
@@ -24,7 +25,9 @@
     "dashboard/dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/mcp/index.ts src/server/index.ts src/index.ts src/storage.ts --outdir dist --target bun --splitting --external playwright --external playwright-core --external electron --external chromium-bidi --external lighthouse",
+    "build": "bun run build:js && bun run build:types",
+    "build:js": "rm -rf dist && bun build src/cli/index.ts src/mcp/index.ts src/server/index.ts src/index.ts src/storage.ts --outdir dist --target bun --splitting --external pg --external playwright --external playwright-core --external electron --external chromium-bidi --external lighthouse",
+    "build:types": "tsc -p tsconfig.build.json --emitDeclarationOnly && rm -rf dist/.sdk-types && tsc -p sdk/tsconfig.json --emitDeclarationOnly --declaration --rootDir sdk/src --outDir dist/.sdk-types && cp dist/.sdk-types/*.d.ts dist/ && rm -rf dist/.sdk-types",
     "build:dashboard": "cd dashboard && bun run build",
     "build:all": "bun run build:dashboard && bun run build",
     "dev": "bun run src/server/index.ts",
@@ -39,7 +42,7 @@
     "validate:structured-logs": "bun scripts/structured-log-validation-lab.ts",
     "validate:streams": "bun scripts/stream-load-validation.ts",
     "lint": "biome check src/",
-    "postinstall": "mkdir -p $HOME/.hasna/logs 2>/dev/null || true"
+    "postinstall": "install -d -m 700 \"$HOME/.hasna/logs\" 2>/dev/null || true"
   },
   "repository": {
     "type": "git",

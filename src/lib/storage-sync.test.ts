@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { PG_MIGRATIONS } from "../db/pg-migrations.ts";
+import { buildPgPoolConfig } from "./remote-storage.ts";
 import { sourceMapSourceRowId } from "./source-map-projections.ts";
 import {
   STORAGE_TABLES,
@@ -105,5 +106,44 @@ describe("logs storage sync config", () => {
       .digest("hex")}`;
 
     expect(sourceMapSourceRowId("sm-legacy", 0)).toBe(expected);
+  });
+
+  test("PostgreSQL pool config keeps local URLs local but requires TLS for remote URLs", () => {
+    expect(
+      buildPgPoolConfig("postgres://user:pass@localhost:5432/logs"),
+    ).toEqual({
+      connectionString: "postgres://user:pass@localhost:5432/logs",
+    });
+    expect(
+      buildPgPoolConfig(
+        "postgres://user:pass@localhost:5432/logs?sslmode=disable",
+      ),
+    ).toEqual({
+      connectionString: "postgres://user:pass@localhost:5432/logs",
+    });
+    expect(buildPgPoolConfig("postgres://user:pass@db.example/logs")).toEqual({
+      connectionString: "postgres://user:pass@db.example/logs",
+      ssl: true,
+    });
+    expect(
+      buildPgPoolConfig("postgres://user:pass@db.example/logs?sslmode=require"),
+    ).toEqual({
+      connectionString: "postgres://user:pass@db.example/logs",
+      ssl: true,
+    });
+  });
+
+  test("PostgreSQL pool config rejects unsafe remote TLS settings", () => {
+    expect(() =>
+      buildPgPoolConfig("postgres://user:pass@db.example/logs?sslmode=disable"),
+    ).toThrow("Unsafe PostgreSQL sslmode");
+    expect(() =>
+      buildPgPoolConfig("postgres://user:pass@db.example/logs?ssl=false"),
+    ).toThrow("Unsafe PostgreSQL ssl setting");
+    expect(
+      JSON.stringify(
+        buildPgPoolConfig("postgres://user:pass@db.example/logs?ssl=true"),
+      ),
+    ).not.toContain("reject" + "Unauthorized");
   });
 });
